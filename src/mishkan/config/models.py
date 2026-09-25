@@ -16,6 +16,7 @@ from pydantic import (
 )
 
 from mishkan.domain.time import validate_timezone
+from mishkan.knowledge.models import KnowledgeClass
 from mishkan.notifications import NotificationConfig
 from mishkan.skills.models import SkillBounds, SkillBundleDefinition, SkillSourceDefinition
 from mishkan.telemetry.models import TelemetryDisclosure, TelemetryExporterKind
@@ -504,6 +505,9 @@ SUPPORTED_MCP_FACADE_OPERATIONS = frozenset(
         "conversation.get",
         "advisory.candidates.list",
         "notification.list",
+        "knowledge.query",
+        "knowledge.sources.list",
+        "knowledge.operations.list",
         "command.submit",
     }
 )
@@ -517,6 +521,8 @@ SUPPORTED_MCP_FACADE_RESOURCES = frozenset(
         "mishkan://conversations",
         "mishkan://advisory/candidates",
         "mishkan://notifications",
+        "mishkan://knowledge/sources",
+        "mishkan://knowledge/operations",
     }
 )
 
@@ -666,6 +672,149 @@ class TelemetryConfig(StrictConfigModel):
         return self
 
 
+class KnowledgeCostClass(StrEnum):
+    LOCAL_FREE = "local_free"
+    EXTERNAL_FREE = "external_free"
+    METERED = "metered"
+
+
+class KnowledgeSourceConfig(StrictConfigModel):
+    knowledge_class: KnowledgeClass
+    adapter: str = Field(pattern=r"^[a-z][a-z0-9_.-]{2,127}$")
+    endpoint: AnyHttpUrl | None = None
+    mcp_connection: str | None = Field(default=None, min_length=1, max_length=256)
+    credential_refs: tuple[CredentialReference, ...] = ()
+    credential_header: str | None = Field(default=None, min_length=1, max_length=128)
+    credential_prefix: str = Field(default="", max_length=64)
+    network_profile: str | None = Field(default=None, min_length=1, max_length=256)
+    disclosure_profile: str = Field(min_length=1, max_length=256)
+    cost_class: KnowledgeCostClass
+    enabled: bool = True
+    query_timeout_seconds: float = Field(gt=0, le=3_600)
+    operation_timeout_seconds: float = Field(gt=0, le=86_400)
+    max_results: int = Field(ge=1, le=10_000)
+    max_result_bytes: int = Field(ge=1, le=268_435_456)
+    provider_schema: str = Field(min_length=1, max_length=128)
+
+    @field_validator("credential_header")
+    @classmethod
+    def credential_header_is_transport_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.casefold()
+        forbidden = {
+            "connection",
+            "content-length",
+            "host",
+            "keep-alive",
+            "proxy-authorization",
+            "te",
+            "trailer",
+            "transfer-encoding",
+            "upgrade",
+        }
+        if not value.replace("-", "").isalnum() or normalized in forbidden:
+            raise ValueError("knowledge credential header is invalid or transport-controlled")
+        return normalized
+
+    @model_validator(mode="after")
+    def adapter_has_exact_transport(self) -> Self:
+        if self.adapter == "native.literal":
+            if self.endpoint is not None or self.mcp_connection is not None:
+                raise ValueError("literal knowledge cannot configure an external transport")
+            if self.credential_refs or self.credential_header or self.network_profile:
+                raise ValueError(
+                    "literal knowledge cannot configure external credentials or network"
+                )
+        elif self.adapter == "graphify.mcp":
+            if self.mcp_connection is None or self.endpoint is not None:
+                raise ValueError("Graphify knowledge requires exactly one MCP connection")
+            if self.knowledge_class is not KnowledgeClass.STRUCTURAL:
+                raise ValueError("Graphify adapter is structural knowledge only")
+        elif (
+            self.endpoint is None or self.mcp_connection is not None or self.network_profile is None
+        ):
+            raise ValueError("HTTP knowledge adapters require endpoint and network profile")
+        if bool(self.credential_refs) != bool(self.credential_header):
+            raise ValueError("knowledge credentials require an explicit header mapping")
+        return self
+
+
+class KnowledgeGraphRefreshConfig(StrictConfigModel):
+    """Public execution contract for the local Graphify refresh adapter."""
+
+    executable: Path
+    session_profile: str = Field(min_length=1, max_length=256)
+    publish_path: Path
+    graph_relative_path: Path
+    no_cluster: bool
+    max_repository_files: int = Field(ge=1, le=10_000_000)
+    max_repository_bytes: int = Field(ge=1, le=1_099_511_627_776)
+    max_diff_entries: int = Field(ge=1, le=1_000_000)
+
+    @field_validator("executable")
+    @classmethod
+    def executable_is_absolute(cls, value: Path) -> Path:
+        if not value.is_absolute():
+            raise ValueError("Graphify refresh executable must be absolute")
+        return value
+
+    @field_validator("publish_path", "graph_relative_path")
+    @classmethod
+    def paths_are_project_relative(cls, value: Path) -> Path:
+        if value.is_absolute() or not value.parts or ".." in value.parts:
+            raise ValueError("Graphify refresh paths must be project-relative")
+        return value
+
+
+class KnowledgeConfig(StrictConfigModel):
+    staging_root: Path
+    inspection_profile: str = Field(min_length=1, max_length=1_024)
+    sources: dict[str, KnowledgeSourceConfig] = Field(min_length=1)
+    selection_order: dict[KnowledgeClass, tuple[str, ...]] = Field(min_length=1)
+    literal_fallback: bool
+    promotion_approver_identities: tuple[str, ...] = Field(min_length=1)
+    capture_max_characters: int = Field(ge=1, le=1_048_576)
+    operation_poll_seconds: float = Field(gt=0, le=60)
+    query_retention_days: int = Field(ge=1, le=36_500)
+    graph_refresh: KnowledgeGraphRefreshConfig | None = None
+
+    @field_validator("staging_root")
+    @classmethod
+    def staging_root_is_project_relative(cls, value: Path) -> Path:
+        if value.is_absolute() or not value.parts or ".." in value.parts:
+            raise ValueError("knowledge staging root must be project-relative")
+        return value
+
+    @model_validator(mode="after")
+    def source_selection_is_complete_and_compatible(self) -> Self:
+        if len(self.promotion_approver_identities) != len(set(self.promotion_approver_identities)):
+            raise ValueError("knowledge promotion approver identities must be unique")
+        selected: set[str] = set()
+        for knowledge_class, source_ids in self.selection_order.items():
+            if len(source_ids) != len(set(source_ids)):
+                raise ValueError("knowledge source selection order must be unique")
+            for source_id in source_ids:
+                source = self.sources.get(source_id)
+                if source is None:
+                    raise ValueError(f"knowledge selection references unknown source: {source_id}")
+                if source.knowledge_class is not knowledge_class:
+                    raise ValueError("knowledge selection source has a different context class")
+                selected.add(source_id)
+        enabled = {source_id for source_id, source in self.sources.items() if source.enabled}
+        if enabled - selected:
+            raise ValueError(
+                "every enabled knowledge source must have deterministic selection order"
+            )
+        literal = self.selection_order.get(KnowledgeClass.LITERAL, ())
+        if not literal or not any(self.sources[item].enabled for item in literal):
+            raise ValueError("knowledge configuration requires an enabled literal source")
+        structural = self.selection_order.get(KnowledgeClass.STRUCTURAL, ())
+        if any(self.sources[item].enabled for item in structural) and self.graph_refresh is None:
+            raise ValueError("enabled structural knowledge requires Graphify refresh configuration")
+        return self
+
+
 class MishkanConfig(StrictConfigModel):
     """Complete effective configuration required before a run can be accepted."""
 
@@ -703,6 +852,7 @@ class MishkanConfig(StrictConfigModel):
     )
     notifications: NotificationConfig = Field(default_factory=NotificationConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
+    knowledge: KnowledgeConfig | None = None
 
     @field_validator("timezone")
     @classmethod
@@ -711,7 +861,7 @@ class MishkanConfig(StrictConfigModel):
 
     @model_validator(mode="after")
     def references_exist(self) -> Self:
-        if self.schema_version in {"1.1", "1.2", "1.3", "1.4", "1.5"}:
+        if self.schema_version in {"1.1", "1.2", "1.3", "1.4", "1.5", "1.6"}:
             missing = [
                 field
                 for field, value in (
@@ -725,7 +875,7 @@ class MishkanConfig(StrictConfigModel):
                 raise ValueError(
                     f"configuration 1.1 requires governed capability fields: {missing}"
                 )
-        if self.schema_version in {"1.2", "1.3", "1.4", "1.5"}:
+        if self.schema_version in {"1.2", "1.3", "1.4", "1.5", "1.6"}:
             missing_daemon = [
                 field
                 for field, value in (
@@ -738,7 +888,7 @@ class MishkanConfig(StrictConfigModel):
             ]
             if missing_daemon:
                 raise ValueError(f"configuration 1.2 requires daemon fields: {missing_daemon}")
-        if self.schema_version in {"1.3", "1.4", "1.5"}:
+        if self.schema_version in {"1.3", "1.4", "1.5", "1.6"}:
             missing_capabilities = [
                 field
                 for field, value in (
@@ -775,10 +925,39 @@ class MishkanConfig(StrictConfigModel):
                 and self.telemetry.exporter.network_profile not in self.web.network_profiles
             ):
                 raise ValueError("telemetry exporter references an unknown network profile")
-        if self.schema_version in {"1.4", "1.5"} and self.skills is None:
+        if self.schema_version in {"1.4", "1.5", "1.6"} and self.skills is None:
             raise ValueError("configuration 1.4+ requires the Skills capability configuration")
-        if self.schema_version == "1.5" and self.engineering_profile is None:
-            raise ValueError("configuration 1.5 requires an Engineering profile")
+        if self.schema_version in {"1.5", "1.6"} and self.engineering_profile is None:
+            raise ValueError("configuration 1.5+ requires an Engineering profile")
+        if self.schema_version == "1.6":
+            if self.knowledge is None:
+                raise ValueError("configuration 1.6 requires Knowledge configuration")
+            assert self.web is not None
+            assert self.mcp is not None
+            referenced_network_profiles = {
+                source.network_profile
+                for source in self.knowledge.sources.values()
+                if source.network_profile is not None
+            }
+            missing_knowledge_networks = sorted(
+                referenced_network_profiles - set(self.web.network_profiles)
+            )
+            if missing_knowledge_networks:
+                raise ValueError(
+                    "knowledge configuration references unknown network profiles: "
+                    f"{missing_knowledge_networks}"
+                )
+            referenced_mcp = {
+                source.mcp_connection
+                for source in self.knowledge.sources.values()
+                if source.mcp_connection is not None
+            }
+            missing_knowledge_mcp = sorted(referenced_mcp - set(self.mcp.connections))
+            if missing_knowledge_mcp:
+                raise ValueError(
+                    "knowledge configuration references unknown MCP connections: "
+                    f"{missing_knowledge_mcp}"
+                )
 
         missing_providers = sorted(
             {

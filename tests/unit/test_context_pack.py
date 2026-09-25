@@ -197,6 +197,20 @@ def test_context_pack_materializes_reproducibly_and_detects_edits(tmp_path: Path
     assert manifest.fingerprint == second.manifest_fingerprint
 
 
+def test_context_pack_renders_a_verified_bounded_model_projection(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    manifest = _manifest(store)
+    materializer = _materializer(store, tmp_path)
+
+    projection = materializer.model_projection(manifest, max_bytes=50_000)
+
+    assert manifest.fingerprint in projection
+    assert "artifact_reference" in projection
+    assert "Agent identity" in projection
+    with pytest.raises(MishkanError, match="exceeds its configured bound"):
+        materializer.model_projection(manifest, max_bytes=10)
+
+
 def test_context_pack_reports_missing_optional_source(tmp_path: Path) -> None:
     store = _store(tmp_path)
     manifest = _manifest(store)

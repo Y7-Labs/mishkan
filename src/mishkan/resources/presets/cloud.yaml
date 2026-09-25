@@ -1,4 +1,4 @@
-schema_version: "1.5"
+schema_version: "1.6"
 mode: cloud
 engineering_profile: package://mishkan.resources.environment/default.yaml
 engineering_pack_sources:
@@ -104,6 +104,22 @@ sessions:
         max_file_bytes: 16777216
         max_total_bytes: 268435456
         exclude: [.git/**, .mishkan/**]
+    graphify-refresh:
+      cancellation_signals: [TERM, INT, KILL]
+      grace_seconds: 2.0
+      settle_timeout_seconds: 30.0
+      max_output_bytes: 67108864
+      max_input_bytes: 1048576
+      preview_bytes: 4096
+      read_chunk_bytes: 65536
+      readiness_poll_seconds: 0.1
+      max_memory_mb: 4096
+      max_cpu_seconds: 3600
+      effect_observation:
+        max_entries: 300000
+        max_file_bytes: 268435456
+        max_total_bytes: 3221225472
+        exclude: [.git/**, .mishkan/artifacts/**, .mishkan/sessions/**, .mishkan/mishkan.db*]
 web:
   network_profiles:
     public-read:
@@ -199,6 +215,9 @@ mcp:
         - conversation.get
         - advisory.candidates.list
         - notification.list
+        - knowledge.query
+        - knowledge.sources.list
+        - knowledge.operations.list
         - command.submit
       resources:
         - mishkan://snapshot
@@ -209,6 +228,8 @@ mcp:
         - mishkan://conversations
         - mishkan://advisory/candidates
         - mishkan://notifications
+        - mishkan://knowledge/sources
+        - mishkan://knowledge/operations
       prompts: []
   facade:
     enabled: true
@@ -219,6 +240,36 @@ mcp:
   cancellation_poll_seconds: 0.1
   task_poll_min_seconds: 0.1
   task_poll_max_seconds: 5.0
+knowledge:
+  staging_root: .mishkan/knowledge
+  inspection_profile: package://mishkan.resources.knowledge/default-evidence.yaml
+  sources:
+    literal-native:
+      knowledge_class: literal
+      adapter: native.literal
+      disclosure_profile: repository-scoped
+      cost_class: local_free
+      query_timeout_seconds: 10.0
+      operation_timeout_seconds: 30.0
+      max_results: 100
+      max_result_bytes: 16777216
+      provider_schema: mishkan-literal-1
+  selection_order:
+    literal: [literal-native]
+  literal_fallback: true
+  promotion_approver_identities: [CTO, CEO]
+  capture_max_characters: 16384
+  operation_poll_seconds: 0.25
+  query_retention_days: 90
+  graph_refresh:
+    executable: /usr/local/bin/graphify
+    session_profile: graphify-refresh
+    publish_path: .mishkan/knowledge/published/graph.json
+    graph_relative_path: graphify-out/graph.json
+    no_cluster: true
+    max_repository_files: 250000
+    max_repository_bytes: 2147483648
+    max_diff_entries: 10000
 skills:
   managed_root: .mishkan/skills/active
   sources:

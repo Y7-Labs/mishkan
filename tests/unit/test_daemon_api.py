@@ -281,7 +281,7 @@ async def test_authenticated_command_and_event_query_share_durable_contract(
         "command_type": "system.checkpoint",
         "matched_rule_ids": ["local.application-commands"],
         "policy_fingerprint": event_payload["policy_fingerprint"],
-        "policy_revisions": ["bundled.local@29"],
+        "policy_revisions": ["bundled.local@30"],
         "request_schema_version": "1.0",
         "payload_fields": ["checkpoint"],
         "result_fields": ["recorded"],

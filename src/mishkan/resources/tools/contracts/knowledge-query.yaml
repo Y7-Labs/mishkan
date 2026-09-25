@@ -1,0 +1,28 @@
+schema_version: "1.0"
+tool_id: knowledge.query
+version: 1.0.0
+crewai_name: knowledge_query
+summary: Retrieve bounded attributed evidence for one explicit knowledge class.
+effect_class: read
+source_id: bundled.core
+source_kind: native
+adapter: native.knowledge.query
+input_schema:
+  type: object
+  additionalProperties: false
+  required: [query, external_resources, network_destinations, credential_refs, declared_effects]
+  properties:
+    query: {type: object}
+    external_resources: {type: array, items: {type: string}, uniqueItems: true}
+    network_destinations: {type: array, items: {type: string}, uniqueItems: true}
+    credential_refs: {type: array, items: {type: string}, uniqueItems: true}
+    declared_effects: {type: array, items: {type: string}, uniqueItems: true}
+result_schema: {type: object}
+timeout_behavior: cancel_local
+idempotency: idempotent
+target_scopes: [external_resource, network]
+target_arguments:
+  external_resource: [external_resources]
+  network: [network_destinations]
+policy_arguments: [declared_effects]
+resources: {timeout_seconds: 3600, memory_mb: 256, network: true, concurrency: 8}

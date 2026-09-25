@@ -1,0 +1,144 @@
+{
+  "$defs": {
+    "KnowledgeOperationKind": {
+      "enum": [
+        "ingest",
+        "refresh",
+        "capture",
+        "promote"
+      ],
+      "title": "KnowledgeOperationKind",
+      "type": "string"
+    },
+    "KnowledgeOperationState": {
+      "enum": [
+        "queued",
+        "running",
+        "succeeded",
+        "failed",
+        "cancel_requested",
+        "cancelled",
+        "uncertain"
+      ],
+      "title": "KnowledgeOperationState",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "corpus_id": {
+      "anyOf": [
+        {
+          "format": "uuid",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Corpus Id"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/KnowledgeOperationKind"
+    },
+    "limitation": {
+      "anyOf": [
+        {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Limitation"
+    },
+    "operation_id": {
+      "format": "uuid",
+      "title": "Operation Id",
+      "type": "string"
+    },
+    "project_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Project Id",
+      "type": "string"
+    },
+    "provider_operation_id": {
+      "anyOf": [
+        {
+          "maxLength": 1024,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Provider Operation Id"
+    },
+    "request_fingerprint": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Request Fingerprint",
+      "type": "string"
+    },
+    "request_reference": {
+      "pattern": "^artifact:[0-9a-f-]{36}$",
+      "title": "Request Reference",
+      "type": "string"
+    },
+    "result_references": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Result References",
+      "type": "array"
+    },
+    "revision": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Revision",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Source Id",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/KnowledgeOperationState",
+      "default": "queued"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "kind",
+    "project_id",
+    "source_id",
+    "request_fingerprint",
+    "request_reference"
+  ],
+  "title": "KnowledgeOperation",
+  "type": "object"
+}

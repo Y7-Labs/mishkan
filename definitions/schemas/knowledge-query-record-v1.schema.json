@@ -1,0 +1,306 @@
+{
+  "$defs": {
+    "KnowledgeClass": {
+      "enum": [
+        "literal",
+        "episodic",
+        "semantic",
+        "structural"
+      ],
+      "title": "KnowledgeClass",
+      "type": "string"
+    },
+    "KnowledgeQuery": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "deadline_seconds": {
+          "default": 30.0,
+          "exclusiveMinimum": 0,
+          "maximum": 3600,
+          "title": "Deadline Seconds",
+          "type": "number"
+        },
+        "knowledge_class": {
+          "$ref": "#/$defs/KnowledgeClass"
+        },
+        "max_bytes": {
+          "default": 262144,
+          "maximum": 67108864,
+          "minimum": 1,
+          "title": "Max Bytes",
+          "type": "integer"
+        },
+        "max_results": {
+          "default": 10,
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Max Results",
+          "type": "integer"
+        },
+        "preferred_sources": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Preferred Sources",
+          "type": "array"
+        },
+        "query_id": {
+          "format": "uuid",
+          "title": "Query Id",
+          "type": "string"
+        },
+        "question": {
+          "maxLength": 16384,
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/KnowledgeScope"
+        },
+        "structure_arguments": {
+          "additionalProperties": true,
+          "title": "Structure Arguments",
+          "type": "object"
+        },
+        "structure_operation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnowledgeStructureOperation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "knowledge_class",
+        "question",
+        "scope"
+      ],
+      "title": "KnowledgeQuery",
+      "type": "object"
+    },
+    "KnowledgeQueryState": {
+      "enum": [
+        "running",
+        "completed",
+        "degraded",
+        "failed",
+        "cancelled"
+      ],
+      "title": "KnowledgeQueryState",
+      "type": "string"
+    },
+    "KnowledgeScope": {
+      "additionalProperties": false,
+      "description": "Exact execution and organizational scope for one knowledge request.",
+      "properties": {
+        "agent_identity": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agent Identity"
+        },
+        "context_revision": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Context Revision",
+          "type": "string"
+        },
+        "mission_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mission Id"
+        },
+        "project_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Project Id",
+          "type": "string"
+        },
+        "repository_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repository Id"
+        },
+        "repository_revision": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repository Revision"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run Id"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        }
+      },
+      "required": [
+        "project_id",
+        "context_revision"
+      ],
+      "title": "KnowledgeScope",
+      "type": "object"
+    },
+    "KnowledgeStructureOperation": {
+      "enum": [
+        "query_graph",
+        "get_node",
+        "get_neighbors",
+        "shortest_path",
+        "graph_stats",
+        "graphify_callers",
+        "graphify_callees",
+        "graphify_trace",
+        "graphify_impact",
+        "graphify_rank_files",
+        "god_nodes"
+      ],
+      "title": "KnowledgeStructureOperation",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "bundle_reference": {
+      "anyOf": [
+        {
+          "pattern": "^artifact:[0-9a-f-]{36}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Bundle Reference"
+    },
+    "completed_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Completed At"
+    },
+    "limitation_codes": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitation Codes",
+      "type": "array"
+    },
+    "query": {
+      "$ref": "#/$defs/KnowledgeQuery"
+    },
+    "revision": {
+      "minimum": 1,
+      "title": "Revision",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "started_at": {
+      "format": "date-time",
+      "title": "Started At",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/KnowledgeQueryState"
+    }
+  },
+  "required": [
+    "query",
+    "state",
+    "revision"
+  ],
+  "title": "KnowledgeQueryRecord",
+  "type": "object"
+}

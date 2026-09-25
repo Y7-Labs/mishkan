@@ -390,6 +390,10 @@ class DurableArtifactService:
                 update={"lifecycle": ArtifactLifecycle(row.lifecycle)}
             )
 
+    def read_manifest(self, reference: str) -> ArtifactManifest:
+        """Expose the common immutable artifact-reader contract."""
+        return self.manifest(reference)
+
     def list_manifests(self, *, offset: int = 0, limit: int = 100) -> tuple[ArtifactManifest, ...]:
         if offset < 0 or limit < 1 or limit > 1_000:
             raise MishkanError(ErrorCode.OUTPUT_CONTRACT, "artifact query bound is invalid")

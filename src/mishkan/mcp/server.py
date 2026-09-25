@@ -21,10 +21,12 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from mishkan.application import ApplicationCommand
 from mishkan.daemon.auth import TokenFile
 from mishkan.domain.errors import ErrorCode, MishkanError
+from mishkan.knowledge import KnowledgeQuery
 from mishkan.mcp.facade import (
     ConversationListQuery,
     ConversationQuery,
     EventQuery,
+    KnowledgeListQuery,
     LimitQuery,
     McpFacadePort,
     McpFacadeRouter,
@@ -157,6 +159,9 @@ class McpProtocolFacade:
                 "conversation.get": "Read one channel and its bounded message history.",
                 "advisory.candidates.list": "List candidates without granting activation.",
                 "notification.list": "Read configurable notification projections over events.",
+                "knowledge.query": "Retrieve bounded attributed evidence for an explicit class.",
+                "knowledge.sources.list": "List configured knowledge sources without probing them.",
+                "knowledge.operations.list": "List bounded durable knowledge operations.",
                 "command.submit": "Submit one governed, idempotent application command.",
             }
             return [
@@ -200,6 +205,8 @@ class McpProtocolFacade:
                 "mishkan://conversations": "MISHKAN conversations",
                 "mishkan://advisory/candidates": "MISHKAN advisory candidates",
                 "mishkan://notifications": "MISHKAN notifications",
+                "mishkan://knowledge/sources": "MISHKAN knowledge sources",
+                "mishkan://knowledge/operations": "MISHKAN knowledge operations",
             }
             return [
                 types.Resource(
@@ -255,5 +262,8 @@ class McpProtocolFacade:
             "conversation.get": ConversationQuery.model_json_schema(),
             "advisory.candidates.list": empty,
             "notification.list": NotificationQuery.model_json_schema(),
+            "knowledge.query": KnowledgeQuery.model_json_schema(),
+            "knowledge.sources.list": empty,
+            "knowledge.operations.list": KnowledgeListQuery.model_json_schema(),
             "command.submit": ApplicationCommand.model_json_schema(),
         }

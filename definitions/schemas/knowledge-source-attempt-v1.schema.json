@@ -1,0 +1,110 @@
+{
+  "$defs": {
+    "KnowledgeAttemptState": {
+      "enum": [
+        "succeeded",
+        "empty",
+        "unavailable",
+        "incompatible",
+        "failed",
+        "cancelled"
+      ],
+      "title": "KnowledgeAttemptState",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "attempt_id": {
+      "format": "uuid",
+      "title": "Attempt Id",
+      "type": "string"
+    },
+    "error_code": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Error Code"
+    },
+    "latency_ms": {
+      "minimum": 0,
+      "title": "Latency Ms",
+      "type": "number"
+    },
+    "limitation": {
+      "anyOf": [
+        {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Limitation"
+    },
+    "provider_schema": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Provider Schema"
+    },
+    "query_id": {
+      "format": "uuid",
+      "title": "Query Id",
+      "type": "string"
+    },
+    "recorded_at": {
+      "format": "date-time",
+      "title": "Recorded At",
+      "type": "string"
+    },
+    "result_count": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Result Count",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Source Id",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/KnowledgeAttemptState"
+    }
+  },
+  "required": [
+    "query_id",
+    "source_id",
+    "state",
+    "latency_ms"
+  ],
+  "title": "KnowledgeSourceAttempt",
+  "type": "object"
+}

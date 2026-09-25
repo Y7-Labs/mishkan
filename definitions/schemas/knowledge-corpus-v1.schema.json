@@ -1,0 +1,119 @@
+{
+  "$defs": {
+    "KnowledgeClass": {
+      "enum": [
+        "literal",
+        "episodic",
+        "semantic",
+        "structural"
+      ],
+      "title": "KnowledgeClass",
+      "type": "string"
+    },
+    "KnowledgeCorpusState": {
+      "enum": [
+        "empty",
+        "indexing",
+        "ready",
+        "stale",
+        "degraded",
+        "failed"
+      ],
+      "title": "KnowledgeCorpusState",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "authorized_repositories": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Authorized Repositories",
+      "type": "array"
+    },
+    "corpus_id": {
+      "format": "uuid",
+      "title": "Corpus Id",
+      "type": "string"
+    },
+    "external_identity": {
+      "maxLength": 1024,
+      "minLength": 1,
+      "title": "External Identity",
+      "type": "string"
+    },
+    "indexed_revision": {
+      "anyOf": [
+        {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Indexed Revision"
+    },
+    "knowledge_class": {
+      "$ref": "#/$defs/KnowledgeClass"
+    },
+    "project_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Project Id",
+      "type": "string"
+    },
+    "revision": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Revision",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "snapshot_reference": {
+      "anyOf": [
+        {
+          "pattern": "^artifact:[0-9a-f-]{36}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Snapshot Reference"
+    },
+    "source_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Source Id",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/KnowledgeCorpusState",
+      "default": "empty"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "source_id",
+    "knowledge_class",
+    "external_identity"
+  ],
+  "title": "KnowledgeCorpus",
+  "type": "object"
+}

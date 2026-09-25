@@ -413,6 +413,318 @@
       "title": "DaemonConfig",
       "type": "object"
     },
+    "KnowledgeClass": {
+      "enum": [
+        "literal",
+        "episodic",
+        "semantic",
+        "structural"
+      ],
+      "title": "KnowledgeClass",
+      "type": "string"
+    },
+    "KnowledgeConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "capture_max_characters": {
+          "maximum": 1048576,
+          "minimum": 1,
+          "title": "Capture Max Characters",
+          "type": "integer"
+        },
+        "graph_refresh": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnowledgeGraphRefreshConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "inspection_profile": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Inspection Profile",
+          "type": "string"
+        },
+        "literal_fallback": {
+          "title": "Literal Fallback",
+          "type": "boolean"
+        },
+        "operation_poll_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 60,
+          "title": "Operation Poll Seconds",
+          "type": "number"
+        },
+        "promotion_approver_identities": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Promotion Approver Identities",
+          "type": "array"
+        },
+        "query_retention_days": {
+          "maximum": 36500,
+          "minimum": 1,
+          "title": "Query Retention Days",
+          "type": "integer"
+        },
+        "selection_order": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/KnowledgeClass"
+          },
+          "title": "Selection Order",
+          "type": "object"
+        },
+        "sources": {
+          "additionalProperties": {
+            "$ref": "#/$defs/KnowledgeSourceConfig"
+          },
+          "minProperties": 1,
+          "title": "Sources",
+          "type": "object"
+        },
+        "staging_root": {
+          "format": "path",
+          "title": "Staging Root",
+          "type": "string"
+        }
+      },
+      "required": [
+        "staging_root",
+        "inspection_profile",
+        "sources",
+        "selection_order",
+        "literal_fallback",
+        "promotion_approver_identities",
+        "capture_max_characters",
+        "operation_poll_seconds",
+        "query_retention_days"
+      ],
+      "title": "KnowledgeConfig",
+      "type": "object"
+    },
+    "KnowledgeCostClass": {
+      "enum": [
+        "local_free",
+        "external_free",
+        "metered"
+      ],
+      "title": "KnowledgeCostClass",
+      "type": "string"
+    },
+    "KnowledgeGraphRefreshConfig": {
+      "additionalProperties": false,
+      "description": "Public execution contract for the local Graphify refresh adapter.",
+      "properties": {
+        "executable": {
+          "format": "path",
+          "title": "Executable",
+          "type": "string"
+        },
+        "graph_relative_path": {
+          "format": "path",
+          "title": "Graph Relative Path",
+          "type": "string"
+        },
+        "max_diff_entries": {
+          "maximum": 1000000,
+          "minimum": 1,
+          "title": "Max Diff Entries",
+          "type": "integer"
+        },
+        "max_repository_bytes": {
+          "maximum": 1099511627776,
+          "minimum": 1,
+          "title": "Max Repository Bytes",
+          "type": "integer"
+        },
+        "max_repository_files": {
+          "maximum": 10000000,
+          "minimum": 1,
+          "title": "Max Repository Files",
+          "type": "integer"
+        },
+        "no_cluster": {
+          "title": "No Cluster",
+          "type": "boolean"
+        },
+        "publish_path": {
+          "format": "path",
+          "title": "Publish Path",
+          "type": "string"
+        },
+        "session_profile": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Session Profile",
+          "type": "string"
+        }
+      },
+      "required": [
+        "executable",
+        "session_profile",
+        "publish_path",
+        "graph_relative_path",
+        "no_cluster",
+        "max_repository_files",
+        "max_repository_bytes",
+        "max_diff_entries"
+      ],
+      "title": "KnowledgeGraphRefreshConfig",
+      "type": "object"
+    },
+    "KnowledgeSourceConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "pattern": "^[a-z][a-z0-9_.-]{2,127}$",
+          "title": "Adapter",
+          "type": "string"
+        },
+        "cost_class": {
+          "$ref": "#/$defs/KnowledgeCostClass"
+        },
+        "credential_header": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Credential Header"
+        },
+        "credential_prefix": {
+          "default": "",
+          "maxLength": 64,
+          "title": "Credential Prefix",
+          "type": "string"
+        },
+        "credential_refs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CredentialReference"
+          },
+          "title": "Credential Refs",
+          "type": "array"
+        },
+        "disclosure_profile": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Disclosure Profile",
+          "type": "string"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "endpoint": {
+          "anyOf": [
+            {
+              "format": "uri",
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint"
+        },
+        "knowledge_class": {
+          "$ref": "#/$defs/KnowledgeClass"
+        },
+        "max_result_bytes": {
+          "maximum": 268435456,
+          "minimum": 1,
+          "title": "Max Result Bytes",
+          "type": "integer"
+        },
+        "max_results": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Max Results",
+          "type": "integer"
+        },
+        "mcp_connection": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mcp Connection"
+        },
+        "network_profile": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Network Profile"
+        },
+        "operation_timeout_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 86400,
+          "title": "Operation Timeout Seconds",
+          "type": "number"
+        },
+        "provider_schema": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Provider Schema",
+          "type": "string"
+        },
+        "query_timeout_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 3600,
+          "title": "Query Timeout Seconds",
+          "type": "number"
+        }
+      },
+      "required": [
+        "knowledge_class",
+        "adapter",
+        "disclosure_profile",
+        "cost_class",
+        "query_timeout_seconds",
+        "operation_timeout_seconds",
+        "max_results",
+        "max_result_bytes",
+        "provider_schema"
+      ],
+      "title": "KnowledgeSourceConfig",
+      "type": "object"
+    },
     "McpConfig": {
       "additionalProperties": false,
       "properties": {
@@ -2136,6 +2448,17 @@
       },
       "title": "Isolation Profiles",
       "type": "array"
+    },
+    "knowledge": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/KnowledgeConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "mcp": {
       "anyOf": [

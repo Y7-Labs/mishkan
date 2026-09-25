@@ -882,6 +882,80 @@ class ProfessionalPromotionRow(Base):
     decided_at: Mapped[str] = mapped_column(String(40), nullable=False)
 
 
+class KnowledgeQueryRow(Base):
+    __tablename__ = "knowledge_queries"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    knowledge_class: Mapped[str] = mapped_column(String(32), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    repository_id: Mapped[str | None] = mapped_column(String(256))
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    required: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    bundle_artifact_id: Mapped[str | None] = mapped_column(ForeignKey("artifacts.id"))
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    completed_at: Mapped[str | None] = mapped_column(String(40))
+
+
+class KnowledgeSourceAttemptRow(Base):
+    __tablename__ = "knowledge_source_attempts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    query_id: Mapped[str] = mapped_column(ForeignKey("knowledge_queries.id"), nullable=False)
+    source_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class KnowledgeCorpusRow(Base):
+    __tablename__ = "knowledge_corpora"
+    __table_args__ = (UniqueConstraint("project_id", "source_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    source_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    knowledge_class: Mapped[str] = mapped_column(String(32), nullable=False)
+    external_identity: Mapped[str] = mapped_column(String(1024), nullable=False)
+    indexed_revision: Mapped[str | None] = mapped_column(String(512))
+    snapshot_artifact_id: Mapped[str | None] = mapped_column(ForeignKey("artifacts.id"))
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class KnowledgeOperationRow(Base):
+    __tablename__ = "knowledge_operations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    source_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    corpus_id: Mapped[str | None] = mapped_column(ForeignKey("knowledge_corpora.id"))
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(71), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class KnowledgePromotionRow(Base):
+    __tablename__ = "knowledge_promotions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    item_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    source_project_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    target_scope: Mapped[str] = mapped_column(String(512), nullable=False)
+    disposition: Mapped[str] = mapped_column(String(32), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    decided_at: Mapped[str | None] = mapped_column(String(40))
+
+
 @dataclass(frozen=True, slots=True)
 class RunSnapshot:
     run_id: str
