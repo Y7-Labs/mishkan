@@ -56,6 +56,17 @@ from mishkan.environment import (
     EnvironmentVerificationRequest,
 )
 from mishkan.execution import ExecutionRequest, ExecutionSession
+from mishkan.knowledge import (
+    KnowledgeClass,
+    KnowledgeIngestRequest,
+    KnowledgeMemoryCaptureRequest,
+    KnowledgeOperation,
+    KnowledgeOperationReconcileRequest,
+    KnowledgePromotion,
+    KnowledgePromotionDecision,
+    KnowledgeQuery,
+    KnowledgeRefreshRequest,
+)
 from mishkan.missions import (
     MissionBrief,
     MissionCrewRevision,
@@ -105,6 +116,10 @@ class SessionLookup(Protocol):
 
 class McpCallLookup(Protocol):
     def call_connection_id(self, request_id: UUID) -> str: ...
+
+
+class KnowledgeOperationLookup(Protocol):
+    def operation(self, operation_id: UUID) -> KnowledgeOperation: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,6 +244,30 @@ COMMAND_SEMANTICS = MappingProxyType(
         ),
         "mcp.call.reconcile": CommandSemantics(
             "application.mcp.control", "external", ("mcp.call.reconcile",), True
+        ),
+        "knowledge.query": CommandSemantics(
+            "application.knowledge.query", "read", ("knowledge.query",)
+        ),
+        "knowledge.ingest": CommandSemantics(
+            "application.knowledge.mutate", "external", ("knowledge.ingest",), True
+        ),
+        "knowledge.refresh": CommandSemantics(
+            "application.knowledge.mutate", "external", ("knowledge.refresh",), True
+        ),
+        "knowledge.operation.cancel": CommandSemantics(
+            "application.knowledge.mutate", "external", ("knowledge.operation.cancel",), True
+        ),
+        "knowledge.operation.reconcile": CommandSemantics(
+            "application.knowledge.mutate", "external", ("knowledge.operation.reconcile",), True
+        ),
+        "knowledge.memory.capture": CommandSemantics(
+            "application.knowledge.mutate", "external", ("knowledge.memory.capture",), True
+        ),
+        "knowledge.promotion.propose": CommandSemantics(
+            "application.knowledge.promotion", "control", ("knowledge.promotion.propose",)
+        ),
+        "knowledge.promotion.decide": CommandSemantics(
+            "application.knowledge.promotion", "control", ("knowledge.promotion.decide",)
         ),
         "skill.version.register": CommandSemantics(
             "application.skill.lifecycle", "skill_lifecycle", ("skill.version.register",)
@@ -419,6 +458,14 @@ _COMMAND_TARGETS = MappingProxyType(
         "mcp.connection.connect": ("mcp_connection", "required"),
         "mcp.call.cancel": ("mcp_call", "uuid"),
         "mcp.call.reconcile": ("mcp_call", "uuid"),
+        "knowledge.query": ("knowledge_query", "uuid"),
+        "knowledge.ingest": ("knowledge_operation", "uuid"),
+        "knowledge.refresh": ("knowledge_operation", "uuid"),
+        "knowledge.operation.cancel": ("knowledge_operation", "uuid"),
+        "knowledge.operation.reconcile": ("knowledge_operation", "uuid"),
+        "knowledge.memory.capture": ("knowledge_operation", "uuid"),
+        "knowledge.promotion.propose": ("knowledge_promotion", "uuid"),
+        "knowledge.promotion.decide": ("knowledge_promotion", "uuid"),
         "skill.version.register": ("skill_version", "uuid"),
         "skill.version.decide": ("skill_version", "uuid"),
         "skill.version.archive": ("skill_version", "uuid"),
@@ -533,6 +580,14 @@ _COMMAND_PAYLOAD_FIELDS = MappingProxyType(
         "mcp.connection.connect": (frozenset(), frozenset()),
         "mcp.call.cancel": (frozenset(), frozenset()),
         "mcp.call.reconcile": (frozenset(), frozenset()),
+        "knowledge.query": (frozenset({"query"}), frozenset()),
+        "knowledge.ingest": (frozenset({"request"}), frozenset()),
+        "knowledge.refresh": (frozenset({"request"}), frozenset()),
+        "knowledge.operation.cancel": (frozenset(), frozenset()),
+        "knowledge.operation.reconcile": (frozenset({"request"}), frozenset()),
+        "knowledge.memory.capture": (frozenset({"request"}), frozenset()),
+        "knowledge.promotion.propose": (frozenset({"proposal"}), frozenset()),
+        "knowledge.promotion.decide": (frozenset({"decision"}), frozenset()),
         "skill.version.register": (frozenset({"record"}), frozenset()),
         "skill.version.decide": (frozenset({"decision"}), frozenset()),
         "skill.version.archive": (
@@ -650,6 +705,13 @@ class AuthorizedApplicationCommand:
     professional_evidence: ProfessionalEvidenceRecord | None = None
     professional_promotion_request: ProfessionalPromotionRequest | None = None
     professional_promotion_disposition: ProfessionalPromotionDisposition | None = None
+    knowledge_query: KnowledgeQuery | None = None
+    knowledge_ingest: KnowledgeIngestRequest | None = None
+    knowledge_refresh: KnowledgeRefreshRequest | None = None
+    knowledge_reconcile: KnowledgeOperationReconcileRequest | None = None
+    knowledge_memory_capture: KnowledgeMemoryCaptureRequest | None = None
+    knowledge_promotion: KnowledgePromotion | None = None
+    knowledge_promotion_decision: KnowledgePromotionDecision | None = None
 
 
 class ApplicationCommandAuthority:
@@ -662,12 +724,14 @@ class ApplicationCommandAuthority:
         changes: ChangeSetLookup,
         sessions: SessionLookup,
         mcp_calls: McpCallLookup | None = None,
+        knowledge_operations: KnowledgeOperationLookup | None = None,
     ) -> None:
         self._config = config
         self._workspace = workspace.resolve(strict=True)
         self._changes = changes
         self._sessions = sessions
         self._mcp_calls = mcp_calls
+        self._knowledge_operations = knowledge_operations
         self._policy: EffectivePolicy = PolicyLoader().load(config.policy_sources, self._workspace)
 
     @property
@@ -738,6 +802,13 @@ class ApplicationCommandAuthority:
         professional_promotion_disposition: ProfessionalPromotionDisposition | None = None
         prospective_run_request: ProspectiveRunRequest | None = None
         repository_establishment_request: RepositoryEstablishmentRequest | None = None
+        knowledge_query: KnowledgeQuery | None = None
+        knowledge_ingest: KnowledgeIngestRequest | None = None
+        knowledge_refresh: KnowledgeRefreshRequest | None = None
+        knowledge_reconcile: KnowledgeOperationReconcileRequest | None = None
+        knowledge_memory_capture: KnowledgeMemoryCaptureRequest | None = None
+        knowledge_promotion: KnowledgePromotion | None = None
+        knowledge_promotion_decision: KnowledgePromotionDecision | None = None
 
         try:
             if normalized.command_type == "run.initialize":
@@ -897,6 +968,202 @@ class ApplicationCommandAuthority:
                 else:
                     assert connection.endpoint is not None
                     network_destinations = (self._network_destination(str(connection.endpoint)),)
+            elif normalized.command_type == "knowledge.query":
+                knowledge_query = KnowledgeQuery.model_validate(normalized.payload["query"])
+                if normalized.target_id != str(knowledge_query.query_id):
+                    raise ValueError("knowledge query target differs from its identity")
+                knowledge = self._config.knowledge
+                if knowledge is None:
+                    raise MishkanError(
+                        ErrorCode.REQUIRED_DEPENDENCY,
+                        "knowledge capability is not configured",
+                    )
+                configured = list(
+                    knowledge.selection_order.get(knowledge_query.knowledge_class, ())
+                )
+                source_ids = (
+                    list(knowledge_query.preferred_sources)
+                    if knowledge_query.preferred_sources
+                    else [item for item in configured if knowledge.sources[item].enabled]
+                )
+                if (
+                    knowledge.literal_fallback
+                    and knowledge_query.knowledge_class
+                    in {KnowledgeClass.SEMANTIC, KnowledgeClass.STRUCTURAL}
+                    and knowledge_query.scope.repository_id is not None
+                ):
+                    source_ids.extend(
+                        item
+                        for item in knowledge.selection_order.get(KnowledgeClass.LITERAL, ())
+                        if item not in source_ids and knowledge.sources[item].enabled
+                    )
+                selected_sources = []
+                for source_id in source_ids:
+                    source = knowledge.sources.get(source_id)
+                    if source is None or not source.enabled:
+                        raise ValueError("knowledge query references an unavailable source")
+                    compatible = source.knowledge_class is knowledge_query.knowledge_class
+                    literal_fallback = (
+                        source.knowledge_class is KnowledgeClass.LITERAL
+                        and knowledge.literal_fallback
+                        and knowledge_query.knowledge_class
+                        in {KnowledgeClass.SEMANTIC, KnowledgeClass.STRUCTURAL}
+                        and knowledge_query.scope.repository_id is not None
+                    )
+                    if not compatible and not literal_fallback:
+                        raise ValueError("knowledge query references an incompatible source")
+                    selected_sources.append((source_id, source))
+                external_resources = tuple(
+                    dict.fromkeys(
+                        (
+                            f"knowledge-project:{knowledge_query.scope.project_id}",
+                            f"knowledge-class:{knowledge_query.knowledge_class.value}",
+                            *(f"knowledge-source:{item}" for item, _ in selected_sources),
+                        )
+                    )
+                )
+                source_scopes = tuple(
+                    self._knowledge_source_scope(source_id) for source_id, _ in selected_sources
+                )
+                credentials = tuple(
+                    sorted({item for scoped, _, _ in source_scopes for item in scoped})
+                )
+                network_destinations = tuple(
+                    sorted({item for _, scoped, _ in source_scopes for item in scoped})
+                )
+                uses_network = bool(network_destinations) or any(
+                    source.mcp_connection is not None for _, source in selected_sources
+                )
+                if knowledge_query.scope.repository_id is not None:
+                    paths = (str(self._workspace),)
+                    external_resources = (
+                        *external_resources,
+                        f"repository:{knowledge_query.scope.repository_id}",
+                        f"repository-revision:{knowledge_query.scope.repository_revision}",
+                    )
+                timeout = math.ceil(knowledge_query.deadline_seconds)
+            elif normalized.command_type in {"knowledge.ingest", "knowledge.refresh"}:
+                knowledge_request = (
+                    KnowledgeIngestRequest.model_validate(normalized.payload["request"])
+                    if normalized.command_type == "knowledge.ingest"
+                    else KnowledgeRefreshRequest.model_validate(normalized.payload["request"])
+                )
+                if normalized.target_id != str(knowledge_request.operation_id):
+                    raise ValueError("knowledge operation target differs from its identity")
+                if knowledge_request.requested_by != normalized.actor_id:
+                    raise MishkanError(
+                        ErrorCode.AUTHORITY_NOT_GRANTED,
+                        "knowledge operation requester must match the authenticated actor",
+                    )
+                if isinstance(knowledge_request, KnowledgeIngestRequest):
+                    knowledge_ingest = knowledge_request
+                    external_resources = (
+                        f"knowledge-project:{knowledge_request.project_id}",
+                        f"knowledge-source:{knowledge_request.source_id}",
+                        f"knowledge-corpus:{knowledge_request.corpus_id}",
+                        f"artifact:{knowledge_request.content_reference}",
+                    )
+                else:
+                    knowledge_refresh = knowledge_request
+                    external_resources = (
+                        f"knowledge-project:{knowledge_request.project_id}",
+                        f"knowledge-source:{knowledge_request.source_id}",
+                        f"knowledge-corpus:{knowledge_request.corpus_id}",
+                    )
+                (
+                    credentials,
+                    network_destinations,
+                    timeout,
+                ) = self._knowledge_source_scope(knowledge_request.source_id)
+            elif normalized.command_type == "knowledge.memory.capture":
+                knowledge_memory_capture = KnowledgeMemoryCaptureRequest.model_validate(
+                    normalized.payload["request"]
+                )
+                if normalized.target_id != str(knowledge_memory_capture.operation_id):
+                    raise ValueError("knowledge memory target differs from its identity")
+                if knowledge_memory_capture.requested_by != normalized.actor_id:
+                    raise MishkanError(
+                        ErrorCode.AUTHORITY_NOT_GRANTED,
+                        "knowledge memory requester must match the authenticated actor",
+                    )
+                proposal = knowledge_memory_capture.proposal
+                external_resources = (
+                    f"knowledge-project:{proposal.project_id}",
+                    f"knowledge-source:{knowledge_memory_capture.source_id}",
+                    f"result:{proposal.accepted_result_id}",
+                    *(f"artifact:{item}" for item in proposal.evidence_references),
+                )
+                (
+                    credentials,
+                    network_destinations,
+                    timeout,
+                ) = self._knowledge_source_scope(knowledge_memory_capture.source_id)
+            elif normalized.command_type == "knowledge.operation.reconcile":
+                knowledge_reconcile = KnowledgeOperationReconcileRequest.model_validate(
+                    normalized.payload["request"]
+                )
+                if normalized.target_id != str(knowledge_reconcile.operation_id):
+                    raise ValueError("knowledge reconcile target differs from its identity")
+                if knowledge_reconcile.requested_by != normalized.actor_id:
+                    raise MishkanError(
+                        ErrorCode.AUTHORITY_NOT_GRANTED,
+                        "knowledge reconcile requester must match the authenticated actor",
+                    )
+                credentials, network_destinations, timeout, operation = (
+                    self._knowledge_operation_scope(knowledge_reconcile.operation_id)
+                )
+                external_resources = (
+                    f"knowledge-operation:{normalized.target_id}",
+                    f"knowledge-project:{operation.project_id}",
+                    f"knowledge-source:{operation.source_id}",
+                )
+            elif normalized.command_type == "knowledge.operation.cancel":
+                operation_id = self._target_uuid(normalized)
+                credentials, network_destinations, timeout, operation = (
+                    self._knowledge_operation_scope(operation_id)
+                )
+                external_resources = (
+                    f"knowledge-operation:{normalized.target_id}",
+                    f"knowledge-project:{operation.project_id}",
+                    f"knowledge-source:{operation.source_id}",
+                )
+            elif normalized.command_type == "knowledge.promotion.propose":
+                knowledge_promotion = KnowledgePromotion.model_validate(
+                    normalized.payload["proposal"]
+                )
+                if normalized.target_id != str(knowledge_promotion.promotion_id):
+                    raise ValueError("knowledge promotion target differs from its identity")
+                if knowledge_promotion.proposed_by != normalized.actor_id:
+                    raise MishkanError(
+                        ErrorCode.AUTHORITY_NOT_GRANTED,
+                        "knowledge promotion proposer must match the authenticated actor",
+                    )
+                external_resources = (
+                    f"knowledge-project:{knowledge_promotion.source_project_id}",
+                    f"knowledge-item:{knowledge_promotion.item_id}",
+                    f"knowledge-target-scope:{knowledge_promotion.target_scope}",
+                    *(f"artifact:{item}" for item in knowledge_promotion.evidence_references),
+                )
+            elif normalized.command_type == "knowledge.promotion.decide":
+                knowledge_promotion_decision = KnowledgePromotionDecision.model_validate(
+                    normalized.payload["decision"]
+                )
+                if normalized.target_id != str(knowledge_promotion_decision.promotion_id):
+                    raise ValueError("knowledge promotion decision target differs")
+                if knowledge_promotion_decision.decided_by != normalized.actor_id:
+                    raise MishkanError(
+                        ErrorCode.AUTHORITY_NOT_GRANTED,
+                        "knowledge promotion decider must match the authenticated actor",
+                    )
+                external_resources = (f"knowledge-promotion:{normalized.target_id}",)
+                effects = tuple(
+                    sorted(
+                        {
+                            *effects,
+                            f"knowledge.promotion.{knowledge_promotion_decision.disposition.value}",
+                        }
+                    )
+                )
             elif normalized.command_type.startswith("registry.entry."):
                 if normalized.target_id is None:
                     raise ValueError("registry lifecycle target identity is required")
@@ -998,8 +1265,10 @@ class ApplicationCommandAuthority:
                     f"skill-learning:{skill_learning.request_id}",
                     f"task:{skill_learning.task_id}",
                 ]
-                for source in skill_learning.sources:
-                    resources.append(f"learning-source:{source.kind.value}:{source.locator}")
+                for learning_source in skill_learning.sources:
+                    resources.append(
+                        f"learning-source:{learning_source.kind.value}:{learning_source.locator}"
+                    )
                 external_resources = tuple(resources)
             elif normalized.command_type == "environment.observe":
                 environment_observation = EnvironmentObservationRequest.model_validate(
@@ -1734,6 +2003,13 @@ class ApplicationCommandAuthority:
             professional_promotion_disposition=professional_promotion_disposition,
             prospective_run_request=prospective_run_request,
             repository_establishment_request=repository_establishment_request,
+            knowledge_query=knowledge_query,
+            knowledge_ingest=knowledge_ingest,
+            knowledge_refresh=knowledge_refresh,
+            knowledge_reconcile=knowledge_reconcile,
+            knowledge_memory_capture=knowledge_memory_capture,
+            knowledge_promotion=knowledge_promotion,
+            knowledge_promotion_decision=knowledge_promotion_decision,
         )
 
     @staticmethod
@@ -1803,6 +2079,45 @@ class ApplicationCommandAuthority:
         if len(value) != len(set(value)):
             raise ValueError("application command string values must be unique")
         return tuple(value)
+
+    def _knowledge_source_scope(
+        self, source_id: str
+    ) -> tuple[tuple[str, ...], tuple[str, ...], int]:
+        knowledge = self._config.knowledge
+        if knowledge is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "knowledge capability is not configured",
+            )
+        source = knowledge.sources.get(source_id)
+        if source is None or not source.enabled:
+            raise MishkanError(ErrorCode.TOOL_UNAVAILABLE, "knowledge source is unavailable")
+        credentials = {reference.locator for reference in source.credential_refs}
+        destinations: set[str] = set()
+        if source.endpoint is not None:
+            destinations.add(self._network_destination(str(source.endpoint)))
+        if source.mcp_connection is not None:
+            connection = self._configured_mcp_connection(source.mcp_connection)
+            credentials.update(reference.locator for reference in connection.credential_refs)
+            if connection.endpoint is not None:
+                destinations.add(self._network_destination(str(connection.endpoint)))
+        return (
+            tuple(sorted(credentials)),
+            tuple(sorted(destinations)),
+            math.ceil(source.operation_timeout_seconds),
+        )
+
+    def _knowledge_operation_scope(
+        self, operation_id: UUID
+    ) -> tuple[tuple[str, ...], tuple[str, ...], int, KnowledgeOperation]:
+        if self._knowledge_operations is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "knowledge operation authority is unavailable",
+            )
+        operation = self._knowledge_operations.operation(operation_id)
+        credentials, destinations, timeout = self._knowledge_source_scope(operation.source_id)
+        return credentials, destinations, timeout, operation
 
     def _mcp_connection(self, command: ApplicationCommand) -> McpConnectionConfig:
         if command.payload or command.target_id is None:

@@ -99,6 +99,18 @@ from mishkan.events.models import (
     EventHold as EventEvidenceHold,
 )
 from mishkan.execution.sessions import CursorRead, ExecutionSession
+from mishkan.knowledge.models import (
+    KnowledgeBundle,
+    KnowledgeCorpus,
+    KnowledgeItem,
+    KnowledgeMemoryProposal,
+    KnowledgeOperation,
+    KnowledgePromotion,
+    KnowledgeQuery,
+    KnowledgeQueryRecord,
+    KnowledgeScope,
+    KnowledgeSourceAttempt,
+)
 from mishkan.mcp.models import (
     McpCallRequest,
     McpCallResult,
@@ -279,6 +291,16 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "execution-result-v1.schema.json": ExecutionResult,
     "git-effect-request-v1.schema.json": GitEffectRequest,
     "git-effect-result-v1.schema.json": GitEffectResult,
+    "knowledge-bundle-v1.schema.json": KnowledgeBundle,
+    "knowledge-corpus-v1.schema.json": KnowledgeCorpus,
+    "knowledge-item-v1.schema.json": KnowledgeItem,
+    "knowledge-memory-proposal-v1.schema.json": KnowledgeMemoryProposal,
+    "knowledge-operation-v1.schema.json": KnowledgeOperation,
+    "knowledge-promotion-v1.schema.json": KnowledgePromotion,
+    "knowledge-query-record-v1.schema.json": KnowledgeQueryRecord,
+    "knowledge-query-v1.schema.json": KnowledgeQuery,
+    "knowledge-scope-v1.schema.json": KnowledgeScope,
+    "knowledge-source-attempt-v1.schema.json": KnowledgeSourceAttempt,
     "mcp-call-request-v1.schema.json": McpCallRequest,
     "mcp-call-result-v1.schema.json": McpCallResult,
     "mcp-connection-v1.schema.json": McpConnectionRecord,

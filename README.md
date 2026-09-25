@@ -10,8 +10,8 @@ execution, preserves decisions and evidence, and returns independently reviewed 
 retain authority over consequential actions.
 
 > **Pre-release:** MISHKAN is under active development and currently installs from source. The
-> implemented product is a local, single-daemon system for Linux and macOS. The knowledge stack,
-> scheduler, distributed workers, and operational TUI remain roadmap work.
+> implemented product is a local, single-daemon system for Linux and macOS. Persistent scheduling,
+> distributed workers, and the operational TUI remain roadmap work.
 
 ## Organization model
 
@@ -111,6 +111,7 @@ CLI · Python SDK · HTTP/SSE · MCP bridge
 | Skills and context | Progressive `SKILL.md` packages, bundles, contextual invocation, `/learn`, recoverable lifecycle, deterministic context packages, and candidate-only community recommendations |
 | Engineering environments | Evidence-based engine discovery, technical packs, immutable descriptor sets, governed environment attempts, and measured Docker/Compose/Dev Container/Podman adapters |
 | Observability | Bounded OpenTelemetry projection and optional non-authoritative LangSmith feedback import under public disclosure policy |
+| Attributed knowledge | Explicit literal, episodic, semantic, and structural queries; immutable evidence bundles and Context Packs; authenticated mem0, Cognee, and Graphify adapters; governed ingestion, memory capture, promotion, and visible degraded operation |
 
 The detailed implementation status and evidence are maintained in the
 [documentation index](docs/README.md), not duplicated here.
@@ -211,6 +212,7 @@ Run `uv run mishkan --help` for the authoritative command tree.
 | `skill`, `context` | Inspect, invoke, learn, evolve, and resolve procedural skills and confirmed project/engineer context |
 | `environment` | Observe engines, resolve compatible bindings, validate descriptors, execute adapters, and inspect settlement evidence |
 | `telemetry` | Inspect configured disclosure and import attributable non-authoritative evaluation evidence |
+| `knowledge`, `memory`, `code-graph` | Query attributed evidence, inspect sources and operations, capture accepted episodic memory, govern ingestion/promotion, and use Graphify structure through MISHKAN |
 | `org`, `mission` | Inspect the persistent organization, contextual Mission Briefs, crews, assignments, environments, runs, and evidence |
 | `conversation`, `intervention` | Use durable channels and submit governed comments, escalation answers, pauses, resumptions, reassignments, stops, and risk acceptances |
 | `advisory` | Inspect contextual community candidates without activating them automatically |
@@ -240,7 +242,8 @@ with Mishkan(
 ### HTTP, SSE, and MCP
 
 The daemon exposes its versioned API under `/v1`, including commands, health, snapshots, events,
-runs, tasks, artifacts, change sets, and execution sessions. Event streaming resumes from
+runs, tasks, artifacts, change sets, execution sessions, and bounded knowledge queries, corpora,
+operations, promotions, and source health. Event streaming resumes from
 `Last-Event-ID`; retained-history gaps require a fresh snapshot. The configured MCP facade exposes
 only its allowlisted application operations and does not grant authority through discovery.
 
@@ -258,9 +261,17 @@ uv run mishkan --config base.yaml --config project.yaml config show
 uv run mishkan --config base.yaml --config project.yaml config validate
 ```
 
-Operational limits, tool sources, policy sources, provider routes, network profiles, session
-profiles, and MCP connections belong in public configuration. Secret values do not: configuration
-stores credential references, and providers resolve their values at the execution boundary.
+Operational limits, tool sources, policy sources, provider routes, knowledge sources and selection
+order, network and disclosure profiles, session profiles, and MCP connections belong in public
+configuration. Secret values do not: configuration stores credential references, and providers
+resolve their values at the execution boundary.
+
+The optional local knowledge stack is defined in `docker-compose.local.yaml`. It binds mem0,
+Cognee, Graphify MCP, and `mishkand` to loopback, uses pinned provider identities, and routes local
+LLM and embedding work through configured Ollama models. Supply the credential references required
+by the Compose file, validate the generated MISHKAN configuration, and start only the profiles the
+mission needs. Provider availability does not grant authority, and unavailable optional providers
+produce visible degraded evidence rather than fabricated success.
 
 ## Common failures
 
@@ -317,6 +328,6 @@ temporary reviews are intentionally kept outside the versioned documentation bas
 
 ## Support
 
-Use [GitHub Issues](https://github.com/Y4NN777/mishkan/issues) for reproducible bugs and feature
+Use [GitHub Issues](https://github.com/Y7-Labs/mishkan/issues) for reproducible bugs and feature
 requests. Include the MISHKAN version, Python version, operating system, redacted configuration,
 and the relevant event or error envelope.

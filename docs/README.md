@@ -30,6 +30,7 @@ This index is the entry point for durable MISHKAN documentation.
 | [`VALIDATION/web-browser-mcp.md`](VALIDATION/web-browser-mcp.md) | Passed and integrated — D-040 | Original evidence, corrected local/remote conformance gate, and green `develop`/`main` integration matrices for Web, Browser, MCP, and governed harness clients |
 | [`VALIDATION/skills-engineering.md`](VALIDATION/skills-engineering.md) | Passed — D-042 | Complete local and remote evidence for skills, context packages, telemetry, recommendations, engineering environments, and real Docker/Compose/Dev Container/Podman adapters |
 | [`VALIDATION/organization-missions.md`](VALIDATION/organization-missions.md) | Passed, integrated, and promoted — D-044 | Local, remote, `develop`, history-synchronization, and `main` promotion evidence for the 59-identity organization, contextual missions and crews, PM/CTO governance, communication, interventions, environment planning, and professional evolution |
+| [`VALIDATION/attributed-knowledge.md`](VALIDATION/attributed-knowledge.md) | Passed — D-046 | Local, authenticated live-provider, performance, and remote Linux/macOS evidence for explicit knowledge classes, immutable attribution, mem0/Cognee/Graphify integration, governed mutation, promotion, and degraded operation |
 
 ## Authority rules
 

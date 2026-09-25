@@ -455,14 +455,15 @@ rather than presumed by the design.
 
 ### I07 — Attributed knowledge and degraded operation
 
-**Runnable result:** The intent router selects literal repository evidence, mem0 episodic memory,
-Cognee semantic knowledge, or Graphify structure with source and staleness, while safe work
-continues visibly when optional services fail.
+**Runnable result:** Each explicit `literal`, `episodic`, `semantic`, or `structural` query selects
+only compatible configured sources and produces an immutable attributed evidence bundle. Safe work
+continues with visible limitations when optional services fail; no hidden classifier selects the
+query class.
 
 **Build scope:** implement versioned self-hosted mem0 and Cognee clients; integrate Graphify through
-its supported CLI/MCP surface; add scan and incremental refresh, intent routing, attribution,
-staleness, miss evidence, timeouts, promotion decisions, and local Compose profiles using configured
-Ollama routes rather than paid dependencies.
+its supported CLI/MCP surface; add initial and incremental refresh, explicit-class source
+selection, attribution, staleness, miss evidence, timeouts, promotion decisions, and local Compose
+profiles using configured Ollama routes rather than paid dependencies.
 
 **Primary trace:** KNW-001–006.
 

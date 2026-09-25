@@ -1,6 +1,6 @@
 schema_version: "1.0"
 source_id: bundled.local
-revision: "29"
+revision: "30"
 adoption_authority: MISHKAN release
 priority: 0
 rules:
@@ -71,6 +71,32 @@ rules:
       max_memory_mb: 512
       allow_network: true
       max_concurrency: 1
+  - rule_id: local.repository-knowledge
+    priority: 105
+    decision: allow
+    scope:
+      identities: ["role:Repository_Investigator", "role:Repository_Reviewer"]
+      objective_classes: [repository-initialization]
+      repositories: ["*"]
+      outcomes: [mishkan.init]
+      roles: [Repository_Investigator, Repository_Reviewer]
+      capabilities: [knowledge.query]
+      effect_classes: [read]
+      effects: ["*"]
+      paths: ["*"]
+      executables: ["*"]
+      arguments: ["*"]
+      network_destinations: ["*"]
+      remotes: ["*"]
+      branches: ["*"]
+      environments: ["*"]
+      credentials: ["*"]
+      external_resources: ["*"]
+      isolation_profiles: ["*"]
+      max_timeout_seconds: 3600
+      max_memory_mb: 512
+      allow_network: true
+      max_concurrency: 8
   - rule_id: local.repository-probe.approval
     priority: 100
     decision: require_approval
@@ -139,6 +165,14 @@ rules:
         - mcp.connection.connect
         - mcp.call.cancel
         - mcp.call.reconcile
+        - knowledge.query
+        - knowledge.ingest
+        - knowledge.refresh
+        - knowledge.operation.cancel
+        - knowledge.operation.reconcile
+        - knowledge.memory.capture
+        - knowledge.promotion.propose
+        - knowledge.promotion.decide
         - registry.entry.add
         - registry.entry.enable
         - registry.entry.disable
@@ -209,6 +243,9 @@ rules:
         - application.session.settle
         - application.mcp.connect
         - application.mcp.control
+        - application.knowledge.query
+        - application.knowledge.mutate
+        - application.knowledge.promotion
         - application.registry.lifecycle
         - application.skill.lifecycle
         - application.skill.usage

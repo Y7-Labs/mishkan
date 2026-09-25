@@ -71,7 +71,7 @@ async def test_stdio_bridge_is_a_stateless_client_of_mishkand(tmp_path: Path) ->
     assert "command.submit" in {item.name for item in tools.tools}
     assert health.structuredContent == {
         "status": "ready",
-        "schema": "organization_concurrency_v1",
+        "schema": "knowledge_foundation_v1",
     }
     assert result.isError is False
     assert result.structuredContent is not None

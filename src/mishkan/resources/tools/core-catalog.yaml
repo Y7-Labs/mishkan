@@ -1,9 +1,16 @@
 schema_version: "1.0"
 source_id: bundled.core
 source_kind: native
-revision: "11"
+revision: "12"
 adoption_authority: MISHKAN release
 tools:
+  - tool_id: knowledge.query
+    version: 1.0.0
+    summary: Retrieve bounded attributed evidence for one explicit knowledge class.
+    effect_class: read
+    source_id: bundled.core
+    source_kind: native
+    contract_uri: package://mishkan.resources.tools/contracts/knowledge-query.yaml
   - tool_id: file.resolve
     version: 1.0.0
     summary: Resolve one scoped path and report the observed filesystem object.

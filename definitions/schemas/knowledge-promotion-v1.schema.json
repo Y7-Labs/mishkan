@@ -1,0 +1,130 @@
+{
+  "$defs": {
+    "KnowledgePromotionDisposition": {
+      "enum": [
+        "proposed",
+        "approved",
+        "rejected",
+        "revoked"
+      ],
+      "title": "KnowledgePromotionDisposition",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "decided_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Decided At"
+    },
+    "decided_by": {
+      "anyOf": [
+        {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Decided By"
+    },
+    "disposition": {
+      "$ref": "#/$defs/KnowledgePromotionDisposition",
+      "default": "proposed"
+    },
+    "evidence_references": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Evidence References",
+      "type": "array"
+    },
+    "item_id": {
+      "format": "uuid",
+      "title": "Item Id",
+      "type": "string"
+    },
+    "policy_fingerprint": {
+      "anyOf": [
+        {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Policy Fingerprint"
+    },
+    "promotion_id": {
+      "format": "uuid",
+      "title": "Promotion Id",
+      "type": "string"
+    },
+    "proposed_by": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Proposed By",
+      "type": "string"
+    },
+    "rationale": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "title": "Rationale",
+      "type": "string"
+    },
+    "revision": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Revision",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_project_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Source Project Id",
+      "type": "string"
+    },
+    "target_scope": {
+      "maxLength": 512,
+      "minLength": 1,
+      "title": "Target Scope",
+      "type": "string"
+    }
+  },
+  "required": [
+    "item_id",
+    "source_project_id",
+    "target_scope",
+    "rationale",
+    "evidence_references",
+    "proposed_by"
+  ],
+  "title": "KnowledgePromotion",
+  "type": "object"
+}

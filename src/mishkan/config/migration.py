@@ -63,7 +63,7 @@ def migrate_to_1_2(source: Path) -> Path:
 
 
 def migrate_to_latest(source: Path) -> Path:
-    """Atomically migrate one explicit 1.1-1.4 source to schema 1.5."""
+    """Atomically migrate one explicit 1.1-1.5 source to schema 1.6."""
     target = source.expanduser().resolve()
     try:
         document: Any = yaml.safe_load(target.read_text(encoding="utf-8"))
@@ -78,10 +78,11 @@ def migrate_to_latest(source: Path) -> Path:
         "1.2",
         "1.3",
         "1.4",
+        "1.5",
     }:
         raise MishkanError(
             ErrorCode.VERSION,
-            "configuration migration requires one schema 1.1, 1.2, 1.3, or 1.4 source",
+            "configuration migration requires one schema 1.1 through 1.5 source",
             details={"source": str(target), "automatic_migration": False},
         )
     mode = document.get("mode")
@@ -92,7 +93,7 @@ def migrate_to_latest(source: Path) -> Path:
             details={"mode": mode},
         )
     defaults = yaml.safe_load(preset_text(str(mode)))
-    document["schema_version"] = "1.5"
+    document["schema_version"] = "1.6"
     for field in (
         "daemon",
         "persistence",
@@ -103,6 +104,7 @@ def migrate_to_latest(source: Path) -> Path:
         "mcp",
         "skills",
         "engineering_profile",
+        "knowledge",
     ):
         document.setdefault(field, defaults[field])
     payload = yaml.safe_dump(document, sort_keys=False, allow_unicode=True).encode()

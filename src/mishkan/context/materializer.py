@@ -112,6 +112,60 @@ class ContextPackMaterializer:
             return False
         return self._tree_digest(observed) == materialization.tree_digest
 
+    def model_projection(self, manifest: ContextPackManifest, *, max_bytes: int) -> str:
+        """Render one verified, bounded projection for an agent-model boundary."""
+        if max_bytes < 1:
+            raise ValueError("context model projection bound must be positive")
+        entries: list[dict[str, object]] = []
+        omitted: list[str] = []
+        for entry in manifest.entries:
+            try:
+                content = self._read_verified(entry)
+            except MishkanError:
+                if entry.required:
+                    raise
+                omitted.append(entry.logical_path)
+                continue
+            projected: dict[str, object] = {
+                "logical_path": entry.logical_path,
+                "layer": entry.layer,
+                "artifact_reference": entry.artifact_reference,
+                "digest": entry.digest,
+                "media_type": entry.media_type,
+                "source_revision": entry.source_revision,
+            }
+            if self._textual(entry.media_type):
+                try:
+                    projected["content"] = content.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise MishkanError(
+                        ErrorCode.CONTEXT,
+                        "textual context artifact is not valid UTF-8",
+                        details={"logical_path": entry.logical_path},
+                    ) from exc
+            else:
+                projected["content"] = None
+                projected["limitation"] = "binary content omitted from model projection"
+            entries.append(projected)
+        encoded = json.dumps(
+            {
+                "schema_version": "1.0",
+                "context_pack_id": str(manifest.context_pack_id),
+                "manifest_fingerprint": manifest.fingerprint,
+                "entries": entries,
+                "omitted_optional_paths": omitted,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if len(encoded) > max_bytes:
+            raise MishkanError(
+                ErrorCode.CONTEXT,
+                "context model projection exceeds its configured bound",
+                details={"observed": len(encoded), "limit": max_bytes},
+            )
+        return encoded.decode("utf-8")
+
     def _read_verified(self, entry: ContextPackEntry) -> bytes:
         try:
             artifact = self._artifacts.read_manifest(entry.artifact_reference)
@@ -239,3 +293,10 @@ class ContextPackMaterializer:
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
+
+    @staticmethod
+    def _textual(media_type: str) -> bool:
+        normalized = media_type.casefold()
+        return normalized.startswith("text/") or any(
+            token in normalized for token in ("json", "yaml", "xml")
+        )

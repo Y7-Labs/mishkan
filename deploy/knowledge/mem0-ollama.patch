@@ -1,0 +1,86 @@
+diff --git a/server/main.py b/server/main.py
+index 20059fb..d085aab 100644
+--- a/server/main.py
++++ b/server/main.py
+@@ -59,8 +59,8 @@ SENSITIVE_CONFIG_KEYS = {
+ SKIPPED_REQUEST_LOG_PATHS = {"/api/health", "/docs", "/redoc", "/openapi.json"}
+ SKIPPED_REQUEST_LOG_PREFIXES = ("/requests",)
+ 
+-BUNDLED_LLM_PROVIDERS = ("openai", "anthropic", "gemini")
+-BUNDLED_EMBEDDER_PROVIDERS = ("openai", "gemini")
++BUNDLED_LLM_PROVIDERS = ("openai", "anthropic", "gemini", "ollama")
++BUNDLED_EMBEDDER_PROVIDERS = ("openai", "gemini", "ollama")
+ 
+ 
+ def _warn_if_unconfigured() -> None:
+@@ -114,6 +114,10 @@ POSTGRES_COLLECTION_NAME = os.environ.get("POSTGRES_COLLECTION_NAME", "memories")
+ 
+ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+ HISTORY_DB_PATH = os.environ.get("HISTORY_DB_PATH", "/app/history/history.db")
++DEFAULT_LLM_PROVIDER = os.environ.get("MEM0_DEFAULT_LLM_PROVIDER", "openai")
++DEFAULT_EMBEDDER_PROVIDER = os.environ.get("MEM0_DEFAULT_EMBEDDER_PROVIDER", "openai")
++OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
++EMBEDDING_MODEL_DIMS = int(os.environ.get("MEM0_EMBEDDING_DIMENSIONS", "1536"))
+ DEFAULT_LLM_MODEL = os.environ.get("MEM0_DEFAULT_LLM_MODEL", "gpt-5-mini")
+ DEFAULT_EMBEDDER_MODEL = os.environ.get("MEM0_DEFAULT_EMBEDDER_MODEL", "text-embedding-3-small")
+ 
+@@ -130,11 +134,40 @@ DEFAULT_CONFIG = {
+             "collection_name": POSTGRES_COLLECTION_NAME,
++            "embedding_model_dims": EMBEDDING_MODEL_DIMS,
+         },
+     },
+-    "llm": {
+-        "provider": "openai",
+-        "config": {"api_key": OPENAI_API_KEY, "temperature": 0.2, "model": DEFAULT_LLM_MODEL},
+-    },
+-    "embedder": {"provider": "openai", "config": {"api_key": OPENAI_API_KEY, "model": DEFAULT_EMBEDDER_MODEL}},
++    "llm": (
++        {
++            "provider": "ollama",
++            "config": {
++                "model": DEFAULT_LLM_MODEL,
++                "temperature": 0.2,
++                "ollama_base_url": OLLAMA_BASE_URL,
++            },
++        }
++        if DEFAULT_LLM_PROVIDER == "ollama"
++        else {
++            "provider": "openai",
++            "config": {
++                "api_key": OPENAI_API_KEY,
++                "temperature": 0.2,
++                "model": DEFAULT_LLM_MODEL,
++            },
++        }
++    ),
++    "embedder": (
++        {
++            "provider": "ollama",
++            "config": {
++                "model": DEFAULT_EMBEDDER_MODEL,
++                "ollama_base_url": OLLAMA_BASE_URL,
++            },
++        }
++        if DEFAULT_EMBEDDER_PROVIDER == "ollama"
++        else {
++            "provider": "openai",
++            "config": {"api_key": OPENAI_API_KEY, "model": DEFAULT_EMBEDDER_MODEL},
++        }
++    ),
+     "history_db_path": HISTORY_DB_PATH,
+ }
+ 
+diff --git a/server/requirements.txt b/server/requirements.txt
+index 33a11c5..f420dbe 100644
+--- a/server/requirements.txt
++++ b/server/requirements.txt
+@@ -1,7 +1,8 @@
+ fastapi==0.115.8
+ uvicorn==0.34.0
+ pydantic[email]==2.10.4
+-mem0ai>=0.1.48
++mem0ai==2.2.0
++ollama==0.6.2
+ python-dotenv==1.2.2
+ psycopg>=3.2.8
+ psycopg-pool>=3.2.6,<4.0.0

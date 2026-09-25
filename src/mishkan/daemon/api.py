@@ -107,6 +107,32 @@ from mishkan.events import (
     EventRetentionPolicy,
 )
 from mishkan.execution import CursorRead, ExecutionRequest, ExecutionSession, SessionSupervisor
+from mishkan.knowledge import (
+    KnowledgeOperation,
+    KnowledgeQueryState,
+    KnowledgeSourceAttempt,
+)
+from mishkan.knowledge.adapters import (
+    CogneeOssAdapter,
+    GraphifyMcpAdapter,
+    KnowledgeQueryAdapter,
+    LiteralKnowledgeAdapter,
+    Mem0OssAdapter,
+)
+from mishkan.knowledge.inspection import (
+    EvidenceInspectionProfileLoader,
+    KnowledgeEvidenceInspector,
+)
+from mishkan.knowledge.operations import KnowledgeMutationService, SQLiteAcceptedResultVerifier
+from mishkan.knowledge.repository import SQLiteKnowledgeRepository
+from mishkan.knowledge.runtime import (
+    DaemonKnowledgePolicy,
+    GraphifyCliRefreshPort,
+    GraphifyMcpKnowledgePort,
+    RepositoryLiteralKnowledgePort,
+)
+from mishkan.knowledge.service import KnowledgeService
+from mishkan.knowledge.tools import KnowledgeQueryToolAdapter
 from mishkan.mcp import (
     McpContractFactory,
     McpFacadeRouter,
@@ -189,6 +215,7 @@ from mishkan.telemetry.service import TelemetryService
 from mishkan.tools.inspection import ContentInspector, InspectionProfileLoader
 from mishkan.tools.isolation import IsolationProfileLoader, observe_container_commands
 from mishkan.tools.lifecycle import ToolRegistryLifecycle
+from mishkan.web.network import HttpxWebTransport
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
@@ -353,6 +380,52 @@ def _http_status(error: MishkanError) -> int:
     if code in {ErrorCode.OUTPUT_CONTRACT, ErrorCode.CONFIGURATION}:
         return 422
     return 400
+
+
+def _require_knowledge(
+    repository: SQLiteKnowledgeRepository | None,
+    service: KnowledgeService | None,
+    mutations: KnowledgeMutationService | None,
+) -> tuple[SQLiteKnowledgeRepository, KnowledgeService, KnowledgeMutationService]:
+    if repository is None or service is None or mutations is None:
+        raise MishkanError(
+            ErrorCode.REQUIRED_DEPENDENCY,
+            "knowledge capability is not configured",
+        )
+    return repository, service, mutations
+
+
+def _knowledge_source_projection(
+    config: MishkanConfig,
+    observed: Mapping[str, KnowledgeSourceAttempt] | None = None,
+) -> list[dict[str, object]]:
+    knowledge = config.knowledge
+    if knowledge is None:
+        return []
+    selection = {
+        source_id: (knowledge_class.value, index)
+        for knowledge_class, source_ids in knowledge.selection_order.items()
+        for index, source_id in enumerate(source_ids)
+    }
+    observations = observed or {}
+    projection: list[dict[str, object]] = []
+    for source_id, source in sorted(knowledge.sources.items()):
+        attempt = observations.get(source_id)
+        item: dict[str, object] = {
+            "source_id": source_id,
+            "knowledge_class": source.knowledge_class.value,
+            "adapter": source.adapter,
+            "enabled": source.enabled,
+            "cost_class": source.cost_class.value,
+            "disclosure_profile": source.disclosure_profile,
+            "selection_index": selection.get(source_id, ("", -1))[1],
+            "health": attempt.state.value if attempt is not None else "configured_unobserved",
+        }
+        if attempt is not None:
+            item["observed_at"] = attempt.recorded_at.isoformat()
+            item["latency_ms"] = attempt.latency_ms
+        projection.append(item)
+    return projection
 
 
 def create_app(
@@ -559,6 +632,96 @@ def create_app(
         mcp_service.reconcile_after_restart()
         mcp_runner = McpServiceRunner(mcp_service)
     credential_resolver = CredentialPoolResolver()
+    knowledge_repository: SQLiteKnowledgeRepository | None = None
+    knowledge_service: KnowledgeService | None = None
+    knowledge_mutations: KnowledgeMutationService | None = None
+    knowledge_tool_adapter: KnowledgeQueryToolAdapter | None = None
+    if config.knowledge is not None:
+        knowledge_repository = SQLiteKnowledgeRepository(
+            paths.database,
+            busy_timeout_ms=persistence.busy_timeout_ms,
+        )
+        knowledge_policy = DaemonKnowledgePolicy(config.knowledge, paths.workspace)
+        knowledge_inspector = KnowledgeEvidenceInspector(
+            EvidenceInspectionProfileLoader().load(
+                config.knowledge.inspection_profile,
+                paths.workspace,
+            )
+        )
+        literal_adapter = LiteralKnowledgeAdapter(RepositoryLiteralKnowledgePort(paths.workspace))
+        adapters: dict[str, KnowledgeQueryAdapter] = {literal_adapter.adapter_id: literal_adapter}
+        if config.web is not None:
+            transport = HttpxWebTransport()
+            mem0_adapter = Mem0OssAdapter(transport)
+            cognee_adapter = CogneeOssAdapter(transport)
+            adapters[mem0_adapter.adapter_id] = mem0_adapter
+            adapters[cognee_adapter.adapter_id] = cognee_adapter
+        if mcp_runner is not None and mcp_repository is not None and mcp_config is not None:
+            graphify_adapter = GraphifyMcpAdapter(
+                GraphifyMcpKnowledgePort(
+                    mcp_runner,
+                    mcp_repository,
+                    {
+                        connection_id: connection.credential_refs
+                        for connection_id, connection in mcp_config.connections.items()
+                    },
+                    poll_seconds=mcp_config.cancellation_poll_seconds,
+                    credential_resolver=credential_resolver,
+                )
+            )
+            adapters[graphify_adapter.adapter_id] = graphify_adapter
+        network_profiles = config.web.network_profiles if config.web is not None else {}
+        knowledge_service = KnowledgeService(
+            config.knowledge,
+            knowledge_repository,
+            artifacts,
+            adapters=adapters,
+            network_profiles=network_profiles,
+            inspector=knowledge_inspector,
+            policy_gate=knowledge_policy,
+            credential_resolver=credential_resolver,
+        )
+        graph_refresh = None
+        if config.knowledge.graph_refresh is not None:
+            structural_sources = tuple(
+                source
+                for source in config.knowledge.sources.values()
+                if source.enabled and source.knowledge_class.value == "structural"
+            )
+            if structural_sources:
+                graph_refresh = GraphifyCliRefreshPort(
+                    paths.workspace,
+                    config.knowledge.graph_refresh,
+                    supervisor,
+                    artifacts,
+                    staging_root=config.knowledge.staging_root,
+                    max_graph_bytes=max(source.max_result_bytes for source in structural_sources),
+                    poll_seconds=config.knowledge.operation_poll_seconds,
+                    operation_timeout_seconds=max(
+                        source.operation_timeout_seconds for source in structural_sources
+                    ),
+                )
+        knowledge_mutations = KnowledgeMutationService(
+            config.knowledge,
+            knowledge_repository,
+            artifacts,
+            adapters=adapters,
+            network_profiles=network_profiles,
+            inspector=knowledge_inspector,
+            policy=knowledge_policy,
+            accepted_results=SQLiteAcceptedResultVerifier(
+                paths.database,
+                busy_timeout_ms=persistence.busy_timeout_ms,
+            ),
+            graph_refresh=graph_refresh,
+            credential_resolver=credential_resolver,
+        )
+        knowledge_tool_adapter = KnowledgeQueryToolAdapter(
+            config.knowledge,
+            knowledge_service,
+            web=config.web,
+            mcp=mcp_config,
+        )
     telemetry_exporter_config = config.telemetry.exporter
 
     telemetry_service = TelemetryService(
@@ -646,7 +809,12 @@ def create_app(
         task.add_done_callback(telemetry_tasks.discard)
 
     command_authority = ApplicationCommandAuthority(
-        config, paths.workspace, changes, supervisor, mcp_runner
+        config,
+        paths.workspace,
+        changes,
+        supervisor,
+        mcp_runner,
+        knowledge_repository,
     )
 
     async def execute_command(command: ApplicationCommand, principal_id: str) -> CommandResult:
@@ -815,6 +983,11 @@ def create_app(
                                 paths.workspace,
                                 request.objective,
                                 on_run_started=accept_run,
+                                capability_adapters=(
+                                    {knowledge_tool_adapter.adapter_id: knowledge_tool_adapter}
+                                    if knowledge_tool_adapter is not None
+                                    else None
+                                ),
                             )
                         if len(accepted) != 1:
                             raise MishkanError(
@@ -918,6 +1091,8 @@ def create_app(
                                 environment_evidence_service,
                                 technical_pack_service,
                                 telemetry_evaluation_service,
+                                knowledge_service,
+                                knowledge_mutations,
                                 community_recommendations,
                                 mission_repository,
                                 conversation_repository,
@@ -1012,6 +1187,8 @@ def create_app(
             mission_task_claims=mission_task_claims,
             mission_inspections=mission_inspections,
             notifications=notification_service,
+            knowledge_config=config.knowledge,
+            knowledge=knowledge_repository,
         )
         mcp_http = McpHttpFacade(
             router,
@@ -1084,13 +1261,131 @@ def create_app(
     async def snapshot(
         _principal: TokenRecord = authenticated,
     ) -> SnapshotEnvelope:
-        return await _thread_call(repository.snapshot, limit=daemon.event_page_limit)
+        current = await _thread_call(repository.snapshot, limit=daemon.event_page_limit)
+        if knowledge_repository is None or config.knowledge is None:
+            return current
+        operations = await _thread_call(
+            knowledge_repository.list_operations,
+            limit=daemon.event_page_limit,
+        )
+        corpora = await _thread_call(
+            knowledge_repository.list_corpora,
+            limit=daemon.event_page_limit,
+        )
+        queries = await _thread_call(
+            knowledge_repository.list_queries,
+            limit=daemon.event_page_limit,
+        )
+        source_health = await _thread_call(
+            knowledge_repository.source_health,
+            limit=daemon.event_page_limit,
+        )
+        projections = dict(current.projections)
+        projections["knowledge"] = {
+            "sources": _knowledge_source_projection(config, source_health),
+            "operations": [item.model_dump(mode="json") for item in operations],
+            "corpora": [item.model_dump(mode="json") for item in corpora],
+            "degraded": any(item.state.value in {"degraded", "failed"} for item in corpora)
+            or any(item.state is KnowledgeQueryState.DEGRADED for item in queries),
+        }
+        return current.model_copy(update={"projections": projections})
 
     @app.get("/v1/telemetry/status")
     async def telemetry_status(
         _principal: TokenRecord = authenticated,
     ) -> TelemetryStatus:
         return telemetry_service.status()
+
+    @app.get("/v1/knowledge/sources", response_model=None)
+    async def knowledge_sources(
+        _principal: TokenRecord = authenticated,
+    ) -> dict[str, object]:
+        _require_knowledge(knowledge_repository, knowledge_service, knowledge_mutations)
+        assert knowledge_repository is not None
+        source_health = await _thread_call(
+            knowledge_repository.source_health,
+            limit=daemon.event_page_limit,
+        )
+        return {"sources": _knowledge_source_projection(config, source_health)}
+
+    @app.get("/v1/knowledge/queries/{query_id}", response_model=None)
+    async def knowledge_query_get(
+        query_id: UUID,
+        _principal: TokenRecord = authenticated,
+    ) -> dict[str, object]:
+        knowledge = _require_knowledge(
+            knowledge_repository, knowledge_service, knowledge_mutations
+        )[0]
+        record = await _thread_call(knowledge.query, query_id)
+        attempts = await _thread_call(knowledge.attempts, query_id)
+        return {
+            "query": record.model_dump(mode="json"),
+            "attempts": [item.model_dump(mode="json") for item in attempts],
+        }
+
+    @app.get("/v1/knowledge/corpora", response_model=None)
+    async def knowledge_corpora(
+        _principal: TokenRecord = authenticated,
+        project_id: Annotated[str | None, Query(min_length=1, max_length=256)] = None,
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=1_000)] = 100,
+    ) -> tuple[dict[str, object], ...]:
+        knowledge = _require_knowledge(
+            knowledge_repository, knowledge_service, knowledge_mutations
+        )[0]
+        records = await _thread_call(
+            knowledge.list_corpora,
+            project_id=project_id,
+            offset=offset,
+            limit=limit,
+        )
+        return tuple(item.model_dump(mode="json") for item in records)
+
+    @app.get("/v1/knowledge/operations", response_model=None)
+    async def knowledge_operations(
+        _principal: TokenRecord = authenticated,
+        project_id: Annotated[str | None, Query(min_length=1, max_length=256)] = None,
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=1_000)] = 100,
+    ) -> tuple[dict[str, object], ...]:
+        knowledge = _require_knowledge(
+            knowledge_repository, knowledge_service, knowledge_mutations
+        )[0]
+        records = await _thread_call(
+            knowledge.list_operations,
+            project_id=project_id,
+            offset=offset,
+            limit=limit,
+        )
+        return tuple(item.model_dump(mode="json") for item in records)
+
+    @app.get("/v1/knowledge/operations/{operation_id}", response_model=KnowledgeOperation)
+    async def knowledge_operation_get(
+        operation_id: UUID,
+        _principal: TokenRecord = authenticated,
+    ) -> KnowledgeOperation:
+        knowledge = _require_knowledge(
+            knowledge_repository, knowledge_service, knowledge_mutations
+        )[0]
+        return await _thread_call(knowledge.operation, operation_id)
+
+    @app.get("/v1/knowledge/promotions", response_model=None)
+    async def knowledge_promotions(
+        _principal: TokenRecord = authenticated,
+        project_id: Annotated[str | None, Query(min_length=1, max_length=256)] = None,
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=1_000)] = 100,
+    ) -> tuple[dict[str, object], ...]:
+        knowledge = _require_knowledge(
+            knowledge_repository, knowledge_service, knowledge_mutations
+        )[0]
+        records = await _thread_call(
+            knowledge.list_promotions,
+            project_id=project_id,
+            offset=offset,
+            limit=limit,
+        )
+        return tuple(item.model_dump(mode="json") for item in records)
 
     @app.get("/v1/context/engineer-profile")
     async def confirmed_engineer_profile(
@@ -2011,6 +2306,8 @@ def _dispatch(
     environment_evidence_service: EnvironmentEvidenceService | None,
     technical_pack_service: TechnicalPackService | None,
     telemetry_evaluation_service: TelemetryEvaluationService,
+    knowledge_service: KnowledgeService | None,
+    knowledge_mutations: KnowledgeMutationService | None,
     community_recommendations: ContextualRecommendationService,
     mission_repository: SQLiteMissionRepository,
     conversation_repository: SQLiteConversationRepository,
@@ -2021,6 +2318,60 @@ def _dispatch(
     mission_task_claims: MissionTaskClaimService,
 ) -> tuple[str, dict[str, object]]:
     payload = command.payload
+    if command.command_type == "knowledge.query":
+        if knowledge_service is None or authorized.knowledge_query is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "knowledge query capability is unavailable",
+            )
+        bundle = knowledge_service.query(authorized.knowledge_query)
+        return "knowledge.query_settled", bundle.model_dump(mode="json")
+    if command.command_type.startswith("knowledge."):
+        if knowledge_mutations is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "knowledge mutation capability is unavailable",
+            )
+        if command.command_type == "knowledge.ingest" and authorized.knowledge_ingest:
+            result = knowledge_mutations.ingest(authorized.knowledge_ingest)
+            return "knowledge.operation_settled", result.model_dump(mode="json")
+        if command.command_type == "knowledge.refresh" and authorized.knowledge_refresh:
+            result = knowledge_mutations.refresh(
+                authorized.knowledge_refresh,
+                policy_fingerprint=authorized.decision.policy_fingerprint,
+            )
+            return "knowledge.operation_settled", result.model_dump(mode="json")
+        if (
+            command.command_type == "knowledge.memory.capture"
+            and authorized.knowledge_memory_capture
+        ):
+            result = knowledge_mutations.capture_memory(authorized.knowledge_memory_capture)
+            return "knowledge.operation_settled", result.model_dump(mode="json")
+        if command.command_type == "knowledge.operation.cancel" and command.target_id:
+            result = knowledge_mutations.cancel(UUID(command.target_id))
+            return "knowledge.operation_settled", result.model_dump(mode="json")
+        if (
+            command.command_type == "knowledge.operation.reconcile"
+            and authorized.knowledge_reconcile
+        ):
+            result = knowledge_mutations.reconcile(authorized.knowledge_reconcile)
+            return "knowledge.operation_reconciled", result.model_dump(mode="json")
+        if command.command_type == "knowledge.promotion.propose" and authorized.knowledge_promotion:
+            promotion = knowledge_mutations.propose_promotion(authorized.knowledge_promotion)
+            return "knowledge.promotion_proposed", promotion.model_dump(mode="json")
+        if (
+            command.command_type == "knowledge.promotion.decide"
+            and authorized.knowledge_promotion_decision
+        ):
+            promotion = knowledge_mutations.decide_promotion(
+                authorized.knowledge_promotion_decision,
+                policy_fingerprint=f"sha256:{authorized.decision.policy_fingerprint}",
+            )
+            return "knowledge.promotion_decided", promotion.model_dump(mode="json")
+        raise MishkanError(
+            ErrorCode.OUTPUT_CONTRACT,
+            "knowledge command payload is incomplete",
+        )
     if command.command_type == "system.checkpoint" and command.target_type == "system":
         return "system.checkpoint_recorded", {"recorded": True}
     if command.command_type == "run.prospective.create":
@@ -2943,4 +3294,25 @@ def _resolve_command_credentials(
             raise MishkanError(ErrorCode.MCP, "MCP mediation is not configured")
         connection_id = mcp_runner.call_connection_id(UUID(command.target_id))
         references = mcp_config.connections[connection_id].credential_refs
+    elif command.command_type.startswith("knowledge."):
+        if command.command_type == "knowledge.query":
+            # Query sources are optional and individually degraded by KnowledgeService.
+            # Resolving all candidate credentials here would turn one absent optional
+            # credential into a command-wide failure before compatible fallback.
+            return {}
+        configured: dict[str, CredentialReference] = {}
+        if config.knowledge is not None:
+            for source in config.knowledge.sources.values():
+                configured.update({item.locator: item for item in source.credential_refs})
+        if mcp_config is not None:
+            for connection in mcp_config.connections.values():
+                configured.update({item.locator: item for item in connection.credential_refs})
+        locators = authorized.request.credentials
+        try:
+            references = tuple(configured[item] for item in locators)
+        except KeyError as exc:
+            raise MishkanError(
+                ErrorCode.AUTHORIZATION_MISSING,
+                "knowledge credential scope is not configured",
+            ) from exc
     return resolver.resolve_exact(references)
