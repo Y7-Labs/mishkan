@@ -4,11 +4,14 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from mishkan.artifacts import ArtifactProvenance
 from mishkan.artifacts.service import DurableArtifactService
 from mishkan.config.loader import ConfigLoader
 from mishkan.config.models import ProjectConfig
 from mishkan.config.presets import preset_text
+from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.execution import SessionSupervisor
 from mishkan.knowledge import (
     KnowledgeClass,
@@ -18,6 +21,7 @@ from mishkan.knowledge import (
     KnowledgeOperationState,
     KnowledgeRefreshRequest,
 )
+from mishkan.knowledge.adapters import ProviderSettlement
 from mishkan.knowledge.runtime import GraphifyCliRefreshPort
 from mishkan.persistence import SchemaManager
 from mishkan.repository import RepositoryInspector
@@ -183,3 +187,56 @@ def test_graphify_refresh_recovers_a_proven_completed_job_without_replay(tmp_pat
     assert recovered is not None
     assert recovered.graph == expected.graph
     assert recovered.provider_operation_id == f"session:{request.operation_id}"
+
+
+def test_graphify_refresh_failures_remain_bounded_and_explicit(tmp_path: Path) -> None:
+    port, artifacts, corpus, request = _runtime(tmp_path)
+    without_repository = request.model_copy(
+        update={"repository_id": None, "repository_revision": None}
+    )
+    with pytest.raises(MishkanError) as incomplete:
+        port.build(without_repository, corpus, policy_fingerprint="c" * 64)
+    assert incomplete.value.envelope.code is ErrorCode.OUTPUT_CONTRACT
+
+    wrong_repository = request.model_copy(update={"repository_id": "other-repository"})
+    with pytest.raises(MishkanError) as mismatched:
+        port.build(wrong_repository, corpus, policy_fingerprint="c" * 64)
+    assert mismatched.value.envelope.code is ErrorCode.REVISION_MISMATCH
+
+    request_artifact = artifacts.put_bytes(
+        request.model_dump_json().encode(),
+        media_type="application/json",
+        provenance=ArtifactProvenance(
+            producer_identity="CTO",
+            run_id="knowledge:project-a",
+            task_attempt_id=str(request.operation_id),
+            call_id=str(request.operation_id),
+            capability="knowledge.refresh",
+            channel="knowledge.operation_request",
+        ),
+        complete=True,
+    )
+    operation = KnowledgeOperation(
+        operation_id=request.operation_id,
+        kind=KnowledgeOperationKind.REFRESH,
+        project_id=request.project_id,
+        source_id=request.source_id,
+        corpus_id=corpus.corpus_id,
+        state=KnowledgeOperationState.UNCERTAIN,
+        request_fingerprint=request.fingerprint,
+        request_reference=request_artifact.reference,
+        revision=2,
+    )
+    assert port.recover(operation, corpus) is None
+    assert port.reconcile(operation, corpus).settlement is ProviderSettlement.UNKNOWN
+    assert port.cancel(operation, corpus).settlement is ProviderSettlement.UNKNOWN
+
+    with pytest.raises(MishkanError) as invalid_json:
+        port._graph_members(b"not-json")
+    assert invalid_json.value.envelope.code is ErrorCode.OUTPUT_CONTRACT
+    with pytest.raises(MishkanError) as invalid_root:
+        port._graph_members(b"[]")
+    assert invalid_root.value.envelope.code is ErrorCode.OUTPUT_CONTRACT
+    with pytest.raises(MishkanError) as invalid_nodes:
+        port._graph_members(b'{"nodes":{},"links":[]}')
+    assert invalid_nodes.value.envelope.code is ErrorCode.OUTPUT_CONTRACT

@@ -26,7 +26,11 @@ from mishkan.knowledge.models import (
 )
 from mishkan.knowledge.repository import SQLiteKnowledgeRepository
 from mishkan.knowledge.service import KnowledgeService
+from mishkan.knowledge.tools import KnowledgeQueryToolAdapter
 from mishkan.persistence import SchemaManager
+from mishkan.policy import ResourceRequest
+from mishkan.tools.adapters import AdapterCall
+from mishkan.tools.gateway_models import ResolvedTargets
 
 
 class StaticAdapter:
@@ -332,3 +336,182 @@ def test_preferred_source_must_remain_enabled_and_class_compatible(tmp_path: Pat
     with pytest.raises(MishkanError) as caught:
         service.query(query)
     assert caught.value.envelope.code is ErrorCode.OUTPUT_CONTRACT
+
+
+def _tool_call(
+    query: KnowledgeQuery,
+    *,
+    external_resources: tuple[str, ...],
+    network_destinations: tuple[str, ...] = (),
+    credential_refs: list[str] | None = None,
+    acting_identity: str = "Backend_Engineer",
+    credentials: dict[str, str] | None = None,
+) -> AdapterCall:
+    return AdapterCall(
+        arguments={
+            "query": query.model_dump(mode="json"),
+            "credential_refs": credential_refs or [],
+        },
+        targets=ResolvedTargets(
+            external_resources=external_resources,
+            network_destinations=network_destinations,
+        ),
+        credentials=credentials or {},
+        execution_id="knowledge-query-1",
+        resources=ResourceRequest(timeout_seconds=30),
+        isolation_profile=None,
+        cancellation_requested=lambda: False,
+        run_id="run-1",
+        task_attempt_id="task-1",
+        acting_identity=acting_identity,
+        capability="knowledge.query",
+    )
+
+
+def test_knowledge_tool_enforces_exact_actor_targets_credentials_and_network(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    literal = StaticAdapter(ProviderKnowledgeResult((_record("literal"),), "literal-1"))
+    service, _, _ = _service(tmp_path / "runtime", {"native.literal": literal})
+    adapter = KnowledgeQueryToolAdapter(
+        config.knowledge,
+        service,
+        web=config.web,
+        mcp=config.mcp,
+    )
+    query = KnowledgeQuery(
+        knowledge_class=KnowledgeClass.LITERAL,
+        question="Read exact evidence",
+        scope=_scope(),
+    )
+    external = (
+        "knowledge-project:project-1",
+        "knowledge-class:literal",
+        "knowledge-source:literal-native",
+        "repository:repository-1",
+        "repository-revision:revision-1",
+    )
+
+    result = adapter.invoke(_tool_call(query, external_resources=external))
+
+    assert result.evidence["adapter"] == "native.knowledge.query"
+    assert result.external_references[0].startswith("artifact:")
+    with pytest.raises(MishkanError) as actor:
+        adapter.invoke(
+            _tool_call(query, external_resources=external, acting_identity="Frontend_Engineer")
+        )
+    assert actor.value.envelope.code is ErrorCode.AUTHORITY_NOT_GRANTED
+    with pytest.raises(MishkanError) as declared:
+        adapter.invoke(_tool_call(query, external_resources=external, credential_refs=["invented"]))
+    assert declared.value.envelope.code is ErrorCode.TOOL_SCHEMA
+    with pytest.raises(MishkanError) as resolved:
+        adapter.invoke(
+            _tool_call(query, external_resources=external, credentials={"invented": "secret"})
+        )
+    assert resolved.value.envelope.code is ErrorCode.TOOL_SCHEMA
+    with pytest.raises(MishkanError) as targets:
+        adapter.invoke(_tool_call(query, external_resources=external[:-1]))
+    assert targets.value.envelope.code is ErrorCode.TOOL_SCHEMA
+
+
+def test_knowledge_tool_derives_semantic_fallback_network_and_late_credentials(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    cognee = StaticAdapter(ProviderKnowledgeResult((_record("semantic"),), "cognee-1"))
+    literal = StaticAdapter(ProviderKnowledgeResult((_record("literal"),), "literal-1"))
+    service, _, _ = _service(
+        tmp_path / "runtime",
+        {"cognee.oss": cognee, "native.literal": literal},
+    )
+    adapter = KnowledgeQueryToolAdapter(
+        config.knowledge,
+        service,
+        web=config.web,
+        mcp=config.mcp,
+    )
+    query = KnowledgeQuery(
+        knowledge_class=KnowledgeClass.SEMANTIC,
+        question="Find semantic evidence",
+        scope=_scope(),
+    )
+    external = (
+        "knowledge-project:project-1",
+        "knowledge-class:semantic",
+        "knowledge-source:cognee-local",
+        "knowledge-source:literal-native",
+        "repository:repository-1",
+        "repository-revision:revision-1",
+    )
+    call = _tool_call(
+        query,
+        external_resources=external,
+        network_destinations=("http://127.0.0.1:7777",),
+        credential_refs=["MISHKAN_COGNEE_BEARER"],
+    )
+
+    result = adapter.invoke(call)
+
+    assert result.output["items"][0]["source_id"] == "cognee-local"
+    with pytest.raises(MishkanError) as network:
+        adapter.invoke(
+            _tool_call(
+                query,
+                external_resources=external,
+                credential_refs=["MISHKAN_COGNEE_BEARER"],
+            )
+        )
+    assert network.value.envelope.code is ErrorCode.TOOL_SCHEMA
+    without_web = KnowledgeQueryToolAdapter(
+        config.knowledge,
+        service,
+        web=None,
+        mcp=config.mcp,
+    )
+    with pytest.raises(MishkanError) as missing_web:
+        without_web.invoke(call)
+    assert missing_web.value.envelope.code is ErrorCode.CONFIGURATION
+
+
+def test_knowledge_tool_rejects_malformed_query_and_missing_graphify_mcp_scope(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    service, _, _ = _service(
+        tmp_path / "runtime",
+        {"graphify.mcp": StaticAdapter(), "native.literal": StaticAdapter()},
+    )
+    adapter = KnowledgeQueryToolAdapter(
+        config.knowledge,
+        service,
+        web=config.web,
+        mcp=None,
+    )
+    malformed = _tool_call(
+        KnowledgeQuery(
+            knowledge_class=KnowledgeClass.LITERAL,
+            question="placeholder",
+            scope=_scope(),
+        ),
+        external_resources=(),
+    )
+    malformed.arguments.pop("query")
+    with pytest.raises(MishkanError) as schema:
+        adapter.invoke(malformed)
+    assert schema.value.envelope.code is ErrorCode.TOOL_SCHEMA
+
+    structural = KnowledgeQuery(
+        knowledge_class=KnowledgeClass.STRUCTURAL,
+        question="Find callers",
+        scope=_scope(),
+    )
+    with pytest.raises(MishkanError) as mcp:
+        adapter.invoke(
+            _tool_call(
+                structural,
+                external_resources=(),
+                credential_refs=["MISHKAN_GRAPHIFY_API_KEY"],
+            )
+        )
+    assert mcp.value.envelope.code is ErrorCode.MCP

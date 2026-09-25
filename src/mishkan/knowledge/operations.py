@@ -508,7 +508,17 @@ class KnowledgeMutationService:
                 ErrorCode.TOOL_UNAVAILABLE,
                 "Graphify refresh port is unavailable",
             )
+        if source.knowledge_class is KnowledgeClass.STRUCTURAL and policy_fingerprint is None:
+            raise MishkanError(
+                ErrorCode.POLICY_CONFLICT,
+                "Graphify refresh lacks authoritative policy evidence",
+            )
         corpus = self._require_corpus(request.corpus_id, request.project_id, request.source_id)
+        if source.knowledge_class is KnowledgeClass.SEMANTIC and corpus.snapshot_reference is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "semantic refresh requires a previously ingested immutable snapshot",
+            )
         if (
             request.repository_id is not None
             and request.repository_id not in corpus.authorized_repositories
@@ -543,11 +553,7 @@ class KnowledgeMutationService:
         result: ProviderMutationResult | None = None
         try:
             if source.knowledge_class is KnowledgeClass.STRUCTURAL:
-                if policy_fingerprint is None:
-                    raise MishkanError(
-                        ErrorCode.POLICY_CONFLICT,
-                        "Graphify refresh lacks authoritative policy evidence",
-                    )
+                assert policy_fingerprint is not None
                 return self._refresh_graph(
                     request,
                     operation,

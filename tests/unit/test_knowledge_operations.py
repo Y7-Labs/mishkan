@@ -20,6 +20,7 @@ from mishkan.knowledge import (
     KnowledgeMemoryCaptureRequest,
     KnowledgeMemoryProposal,
     KnowledgeOperation,
+    KnowledgeOperationKind,
     KnowledgeOperationReconcileRequest,
     KnowledgeOperationState,
     KnowledgePromotion,
@@ -123,6 +124,7 @@ class GraphRefresh:
         self.published: list[str] = []
         self.lose_publish_response = lose_publish_response
         self.settlement = ProviderReconciliation(ProviderSettlement.UNKNOWN)
+        self.recovered: GraphRefreshBuild | None = None
 
     def build(
         self,
@@ -160,7 +162,7 @@ class GraphRefresh:
         self, operation: KnowledgeOperation, corpus: KnowledgeCorpus
     ) -> GraphRefreshBuild | None:
         del operation, corpus
-        return None
+        return self.recovered
 
     def cancel(
         self, operation: KnowledgeOperation, corpus: KnowledgeCorpus
@@ -247,6 +249,7 @@ def test_semantic_ingest_is_explicit_idempotent_and_updates_corpus(tmp_path: Pat
         repository,
         source_id="cognee-local",
         knowledge_class=KnowledgeClass.SEMANTIC,
+        repositories=("repository-1",),
     )
     content = _artifact(artifacts, b"accepted architecture evidence")
     request = KnowledgeIngestRequest(
@@ -435,6 +438,104 @@ def test_graph_refresh_publishes_artifact_reference_then_current_corpus(tmp_path
     assert current.snapshot_reference == completed.result_references[0]
 
 
+def test_semantic_refresh_and_operation_cancellation_are_durable(tmp_path: Path) -> None:
+    adapter = SemanticAdapter()
+    service, repository, artifacts, _ = _runtime(tmp_path, {"cognee.oss": adapter})
+    corpus = _corpus(
+        repository,
+        source_id="cognee-local",
+        knowledge_class=KnowledgeClass.SEMANTIC,
+        repositories=("repository-1",),
+    )
+    snapshot = _artifact(artifacts, b"initial semantic snapshot")
+    ingested = service.ingest(
+        KnowledgeIngestRequest(
+            project_id="project-1",
+            source_id="cognee-local",
+            corpus_id=corpus.corpus_id,
+            content_reference=snapshot,
+            repository_id="repository-1",
+            repository_revision="revision-8",
+            requested_by="Knowledge_Curator",
+        )
+    )
+    assert ingested.state is KnowledgeOperationState.SUCCEEDED
+    refreshed = service.refresh(
+        KnowledgeRefreshRequest(
+            project_id="project-1",
+            source_id="cognee-local",
+            corpus_id=corpus.corpus_id,
+            repository_id="repository-1",
+            repository_revision="revision-9",
+            requested_by="Knowledge_Curator",
+        )
+    )
+    assert refreshed.state is KnowledgeOperationState.SUCCEEDED
+    assert repository.corpus(corpus.corpus_id).indexed_revision == "revision-9"
+
+    request_reference = _artifact(artifacts, b"{}")
+    queued = repository.create_operation(
+        KnowledgeOperation(
+            kind=KnowledgeOperationKind.CAPTURE,
+            project_id="project-1",
+            source_id="mem0-local",
+            request_fingerprint=f"sha256:{'c' * 64}",
+            request_reference=request_reference,
+        )
+    )
+    assert service.cancel(queued.operation_id).state is KnowledgeOperationState.CANCELLED
+
+    running = repository.create_operation(
+        KnowledgeOperation(
+            kind=KnowledgeOperationKind.REFRESH,
+            project_id="project-1",
+            source_id="cognee-local",
+            request_fingerprint=f"sha256:{'d' * 64}",
+            request_reference=request_reference,
+        )
+    )
+    running = repository.transition_operation(
+        running.operation_id,
+        expected_revision=running.revision,
+        state=KnowledgeOperationState.RUNNING,
+    )
+    cancelled = service.cancel(running.operation_id)
+    assert cancelled.state is KnowledgeOperationState.CANCELLED
+    assert service.cancel(cancelled.operation_id) == cancelled
+
+
+def test_graph_refresh_rejects_scope_and_policy_before_dispatch(tmp_path: Path) -> None:
+    graph = GraphRefresh()
+    service, repository, _, _ = _runtime(
+        tmp_path,
+        {"graphify.mcp": object()},
+        graph=graph,
+    )
+    corpus = _corpus(
+        repository,
+        source_id="graphify-local",
+        knowledge_class=KnowledgeClass.STRUCTURAL,
+        repositories=("repository-1",),
+    )
+    unauthorized = KnowledgeRefreshRequest(
+        project_id="project-1",
+        source_id="graphify-local",
+        corpus_id=corpus.corpus_id,
+        repository_id="repository-other",
+        repository_revision="revision-1",
+        requested_by="Knowledge_Curator",
+    )
+    with pytest.raises(MishkanError) as scope:
+        service.refresh(unauthorized, policy_fingerprint="e" * 64)
+    assert scope.value.envelope.code is ErrorCode.AUTHORITY_NOT_GRANTED
+
+    authorized = unauthorized.model_copy(update={"repository_id": "repository-1"})
+    with pytest.raises(MishkanError) as policy:
+        service.refresh(authorized)
+    assert policy.value.envelope.code is ErrorCode.POLICY_CONFLICT
+    assert repository.list_operations() == ()
+
+
 def test_graph_publish_uncertainty_preserves_evidence_and_reconciles(tmp_path: Path) -> None:
     graph = GraphRefresh(lose_publish_response=True)
     service, repository, artifacts, _ = _runtime(
@@ -478,6 +579,49 @@ def test_graph_publish_uncertainty_preserves_evidence_and_reconciles(tmp_path: P
     current = repository.corpus(corpus.corpus_id)
     assert current.state.value == "ready"
     assert current.indexed_revision == "revision-3"
+
+
+def test_graph_reconciliation_recovers_completed_build_without_provider_replay(
+    tmp_path: Path,
+) -> None:
+    graph = GraphRefresh(lose_publish_response=True)
+    service, repository, _, _ = _runtime(
+        tmp_path,
+        {"graphify.mcp": object()},
+        graph=graph,
+    )
+    corpus = _corpus(
+        repository,
+        source_id="graphify-local",
+        knowledge_class=KnowledgeClass.STRUCTURAL,
+        repositories=("repository-1",),
+    )
+    request = KnowledgeRefreshRequest(
+        project_id="project-1",
+        source_id="graphify-local",
+        corpus_id=corpus.corpus_id,
+        repository_id="repository-1",
+        repository_revision="revision-4",
+        requested_by="Knowledge_Curator",
+    )
+    uncertain = service.refresh(request, policy_fingerprint="f" * 64)
+    graph.recovered = graph.build(
+        request,
+        corpus,
+        policy_fingerprint="f" * 64,
+    )
+    graph.lose_publish_response = False
+
+    recovered = service.reconcile(
+        KnowledgeOperationReconcileRequest(
+            operation_id=request.operation_id,
+            expected_revision=uncertain.revision,
+            requested_by="CTO",
+        )
+    )
+
+    assert recovered.state is KnowledgeOperationState.SUCCEEDED
+    assert repository.corpus(corpus.corpus_id).indexed_revision == "revision-4"
 
 
 def test_promotion_requires_independent_configured_authority_and_can_be_revoked(
