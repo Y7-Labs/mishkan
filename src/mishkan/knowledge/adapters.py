@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
@@ -154,6 +155,63 @@ class _HttpKnowledgeAdapter:
             profile=profile,
             headers=headers,
             content=json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(),
+            timeout_seconds=timeout_seconds or source.query_timeout_seconds,
+        )
+        return self._decode(exchange, source_id=source_id, source=source)
+
+    def _request_multipart(
+        self,
+        method: str,
+        url: str,
+        *,
+        source_id: str,
+        source: KnowledgeSourceConfig,
+        profile: NetworkProfileConfig | None,
+        credentials: tuple[str, ...],
+        fields: tuple[tuple[str, str], ...],
+        timeout_seconds: float | None = None,
+    ) -> Any:
+        """Send a bounded form without bypassing the governed HTTP transport."""
+        if profile is None:
+            raise MishkanError(
+                ErrorCode.CONFIGURATION,
+                "HTTP knowledge source has no network profile",
+                details={"source_id": source_id},
+            )
+        boundary = f"mishkan-{secrets.token_hex(16)}"
+        while any(boundary in value for _, value in fields):
+            boundary = f"mishkan-{secrets.token_hex(16)}"
+        body = bytearray()
+        for name, value in fields:
+            body.extend(f"--{boundary}\r\n".encode())
+            body.extend(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode())
+            body.extend(value.encode())
+            body.extend(b"\r\n")
+        body.extend(f"--{boundary}--\r\n".encode())
+        headers = {
+            "accept": "application/json",
+            "content-type": f"multipart/form-data; boundary={boundary}",
+        }
+        if source.credential_header is not None:
+            if len(credentials) != 1:
+                raise MishkanError(
+                    ErrorCode.AUTHORIZATION_MISSING,
+                    "knowledge source requires exactly one resolved credential",
+                    details={"source_id": source_id},
+                )
+            headers[source.credential_header] = source.credential_prefix + credentials[0]
+        elif credentials:
+            raise MishkanError(
+                ErrorCode.TOOL_SCHEMA,
+                "knowledge credentials have no configured header",
+                details={"source_id": source_id},
+            )
+        exchange = self._transport.request(
+            method,
+            url,
+            profile=profile,
+            headers=headers,
+            content=bytes(body),
             timeout_seconds=timeout_seconds or source.query_timeout_seconds,
         )
         return self._decode(exchange, source_id=source_id, source=source)
@@ -379,8 +437,10 @@ class CogneeOssAdapter(_HttpKnowledgeAdapter):
             credentials=credentials,
             payload={
                 "query": query.question,
-                "search_type": "CHUNKS",
+                "searchType": "CHUNKS",
                 "datasets": [query.scope.project_id],
+                "topK": min(query.max_results, source.max_results),
+                "onlyContext": True,
             },
         )
         raw = document.get("results") if isinstance(document, dict) else document
@@ -391,7 +451,19 @@ class CogneeOssAdapter(_HttpKnowledgeAdapter):
                 details={"source_id": source_id},
             )
         records: list[RawKnowledgeRecord] = []
-        for rank, item in enumerate(raw[: min(query.max_results, source.max_results)], start=1):
+        normalized: list[Any] = []
+        for result in raw:
+            if isinstance(result, dict) and "search_result" in result:
+                search_result = result["search_result"]
+                if isinstance(search_result, list):
+                    normalized.extend(search_result)
+                else:
+                    normalized.append(search_result)
+            else:
+                normalized.append(result)
+        for rank, item in enumerate(
+            normalized[: min(query.max_results, source.max_results)], start=1
+        ):
             if isinstance(item, str):
                 content = item
                 identifier = None
@@ -442,7 +514,7 @@ class CogneeOssAdapter(_HttpKnowledgeAdapter):
         credentials: tuple[str, ...],
         network_profile: NetworkProfileConfig,
     ) -> ProviderMutationResult:
-        document = self._request_json(
+        document = self._request_multipart(
             "POST",
             self._endpoint(source, "add"),
             source_id=source_id,
@@ -450,15 +522,18 @@ class CogneeOssAdapter(_HttpKnowledgeAdapter):
             profile=network_profile,
             credentials=credentials,
             timeout_seconds=source.operation_timeout_seconds,
-            payload={
-                "data": content,
-                "datasetName": dataset,
-                "metadata": {"mishkan_operation_id": operation_id},
-            },
+            fields=(
+                ("raw_data", content),
+                ("datasetName", dataset),
+                ("external_metadata", json.dumps([{"mishkan_operation_id": operation_id}])),
+                ("run_in_background", "false"),
+            ),
         )
         if not isinstance(document, dict):
             raise MishkanError(ErrorCode.OUTPUT_CONTRACT, "Cognee add returned no object")
-        provider_id = document.get("operation_id", document.get("task_id"))
+        provider_id = document.get(
+            "pipeline_run_id", document.get("operation_id", document.get("task_id"))
+        )
         return ProviderMutationResult(
             str(provider_id) if provider_id is not None else operation_id,
             (),
@@ -485,12 +560,21 @@ class CogneeOssAdapter(_HttpKnowledgeAdapter):
             timeout_seconds=source.operation_timeout_seconds,
             payload={
                 "datasets": [dataset],
-                "metadata": {"mishkan_operation_id": operation_id},
+                "runInBackground": False,
             },
         )
         if not isinstance(document, dict):
             raise MishkanError(ErrorCode.OUTPUT_CONTRACT, "Cognee cognify returned no object")
         provider_id = document.get("operation_id", document.get("task_id"))
+        if provider_id is None:
+            provider_id = next(
+                (
+                    value["pipeline_run_id"]
+                    for value in document.values()
+                    if isinstance(value, dict) and value.get("pipeline_run_id") is not None
+                ),
+                None,
+            )
         return ProviderMutationResult(
             str(provider_id) if provider_id is not None else operation_id,
             (),

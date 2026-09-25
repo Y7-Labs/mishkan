@@ -37,6 +37,7 @@ services:
       MEM0_DEFAULT_EMBEDDER_PROVIDER: ollama
       MEM0_DEFAULT_LLM_MODEL: ${MISHKAN_MEM0_OLLAMA_MODEL:-qwen2.5:1.5b}
       MEM0_DEFAULT_EMBEDDER_MODEL: ${MISHKAN_MEM0_EMBED_MODEL:-nomic-embed-text}
+      MEM0_EMBEDDING_DIMENSIONS: ${MISHKAN_MEM0_EMBED_DIMENSIONS:-768}
       OLLAMA_BASE_URL: ${MISHKAN_OLLAMA_ENDPOINT:-http://host.docker.internal:11434}
       HISTORY_DB_PATH: /opt/mem0/server/history/history.db
       MEM0_TELEMETRY: "false"
@@ -77,6 +78,7 @@ services:
       DATA_ROOT_DIRECTORY: /var/lib/cognee/data
       TELEMETRY_DISABLED: "1"
       COGNEE_LOG_SEARCH_HISTORY: "false"
+      COGNEE_SKIP_CONNECTION_TEST: "true"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

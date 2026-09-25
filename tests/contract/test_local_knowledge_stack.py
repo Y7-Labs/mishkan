@@ -28,6 +28,7 @@ def test_local_knowledge_stack_is_loopback_authenticated_and_pinned() -> None:
     assert "--api-key" in services["graphify"]["command"]
     assert "./.mishkan/knowledge/published:/graphs" in services["graphify"]["volumes"]
     assert services["mem0"]["environment"]["MEM0_TELEMETRY"] == "false"
+    assert services["mem0"]["environment"]["MEM0_EMBEDDING_DIMENSIONS"]
     assert (
         services["mem0"]["environment"]["HISTORY_DB_PATH"] == "/opt/mem0/server/history/history.db"
     )
@@ -53,6 +54,8 @@ def test_provider_builds_pin_contracts_and_prove_local_ollama_wiring() -> None:
     assert "mem0ai==2.2.0" in patch
     assert "ollama==0.6.2" in patch
     assert '"ollama"' in patch
+    assert "MEM0_EMBEDDING_DIMENSIONS" in patch
+    assert '"embedding_model_dims": EMBEDDING_MODEL_DIMS' in patch
     assert '"cognee[api,ollama]==1.6.1"' in cognee
     assert '"graphifyy[mcp]==0.9.67"' in graphify
     assert '"graphifyy==0.9.67"' in mishkan

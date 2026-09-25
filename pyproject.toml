@@ -67,6 +67,7 @@ markers = [
   "browser: requires an installed Playwright Chromium browser",
   "cloud: requires an explicitly configured cloud model credential",
   "container: requires a ready configured Docker or Podman image",
+  "knowledge_live: requires the explicitly configured local I07 provider stack",
   "commands: command-boundary security test",
   "ollama: requires a local Ollama service and configured model",
   "paths: filesystem path-scope security test",

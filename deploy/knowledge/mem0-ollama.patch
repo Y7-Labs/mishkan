@@ -13,18 +13,20 @@ index 20059fb..d085aab 100644
  
  
  def _warn_if_unconfigured() -> None:
-@@ -114,6 +114,9 @@ POSTGRES_COLLECTION_NAME = os.environ.get("POSTGRES_COLLECTION_NAME", "memories")
+@@ -114,6 +114,10 @@ POSTGRES_COLLECTION_NAME = os.environ.get("POSTGRES_COLLECTION_NAME", "memories")
  
  OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
  HISTORY_DB_PATH = os.environ.get("HISTORY_DB_PATH", "/app/history/history.db")
 +DEFAULT_LLM_PROVIDER = os.environ.get("MEM0_DEFAULT_LLM_PROVIDER", "openai")
 +DEFAULT_EMBEDDER_PROVIDER = os.environ.get("MEM0_DEFAULT_EMBEDDER_PROVIDER", "openai")
 +OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
++EMBEDDING_MODEL_DIMS = int(os.environ.get("MEM0_EMBEDDING_DIMENSIONS", "1536"))
  DEFAULT_LLM_MODEL = os.environ.get("MEM0_DEFAULT_LLM_MODEL", "gpt-5-mini")
  DEFAULT_EMBEDDER_MODEL = os.environ.get("MEM0_DEFAULT_EMBEDDER_MODEL", "text-embedding-3-small")
  
-@@ -130,11 +133,39 @@ DEFAULT_CONFIG = {
+@@ -130,11 +134,40 @@ DEFAULT_CONFIG = {
              "collection_name": POSTGRES_COLLECTION_NAME,
++            "embedding_model_dims": EMBEDDING_MODEL_DIMS,
          },
      },
 -    "llm": {

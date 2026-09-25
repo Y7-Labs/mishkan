@@ -43,12 +43,17 @@ class FakeTransport:
         timeout_seconds: float | None = None,
     ) -> HttpExchange:
         del profile
+        content_type = (headers or {}).get("content-type", "")
         self.requests.append(
             {
                 "method": method,
                 "url": url,
                 "headers": headers,
-                "body": json.loads(content or b"{}"),
+                "body": (
+                    json.loads(content or b"{}")
+                    if content_type == "application/json"
+                    else content or b""
+                ),
                 "timeout": timeout_seconds,
             }
         )
@@ -241,7 +246,20 @@ def test_mem0_reconciliation_finds_operation_marker_without_replaying_write(
 def test_cognee_retrieves_only_raw_chunks_and_never_generated_answers(tmp_path: Path) -> None:
     config = _config(tmp_path)
     source, profile = _source(config, "cognee-local")
-    transport = FakeTransport([(200, {"results": [{"id": "chunk-1", "text": "raw"}]})])
+    transport = FakeTransport(
+        [
+            (
+                200,
+                [
+                    {
+                        "dataset_id": "dataset-1",
+                        "dataset_name": "project-1",
+                        "search_result": [{"id": "chunk-1", "text": "raw"}],
+                    }
+                ],
+            )
+        ]
+    )
 
     result = CogneeOssAdapter(transport).query(
         _query(KnowledgeClass.SEMANTIC),
@@ -253,12 +271,12 @@ def test_cognee_retrieves_only_raw_chunks_and_never_generated_answers(tmp_path: 
 
     assert result.records[0].content == b"raw"
     assert transport.requests[0]["url"] == "http://127.0.0.1:7777/api/v1/search"
-    assert transport.requests[0]["body"]["search_type"] == "CHUNKS"
+    assert transport.requests[0]["body"]["searchType"] == "CHUNKS"
     assert transport.requests[0]["body"]["datasets"] == ["project-1"]
     assert transport.requests[0]["headers"]["authorization"] == "Bearer cognee-secret"
     assert transport.requests[0]["timeout"] == source.query_timeout_seconds
 
-    malformed = FakeTransport([(200, {"results": [{"answer": "generated synthesis"}]})])
+    malformed = FakeTransport([(200, [{"search_result": {"answer": "generated synthesis"}}])])
     with pytest.raises(MishkanError) as caught:
         CogneeOssAdapter(malformed).query(
             _query(KnowledgeClass.SEMANTIC),
@@ -268,6 +286,50 @@ def test_cognee_retrieves_only_raw_chunks_and_never_generated_answers(tmp_path: 
             network_profile=profile,
         )
     assert caught.value.envelope.code is ErrorCode.OUTPUT_CONTRACT
+
+
+def test_cognee_add_uses_the_pinned_multipart_contract_and_attributed_metadata(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    source, profile = _source(config, "cognee-local")
+    assert profile is not None
+    transport = FakeTransport(
+        [
+            (
+                200,
+                {
+                    "status": "PipelineRunCompleted",
+                    "pipeline_run_id": "run-1",
+                    "dataset_id": "dataset-1",
+                    "dataset_name": "project-1",
+                },
+            )
+        ]
+    )
+
+    result = CogneeOssAdapter(transport).add(
+        "Attributed project evidence.",
+        dataset="project-1",
+        operation_id="operation-1",
+        source_id="cognee-local",
+        source=source,
+        credentials=("cognee-secret",),
+        network_profile=profile,
+    )
+
+    request = transport.requests[0]
+    assert request["headers"]["content-type"].startswith("multipart/form-data; boundary=")
+    body = request["body"]
+    assert isinstance(body, bytes)
+    assert b'name="raw_data"' in body
+    assert b"Attributed project evidence." in body
+    assert b'name="datasetName"' in body
+    assert b"project-1" in body
+    assert b'name="external_metadata"' in body
+    assert b"mishkan_operation_id" in body
+    assert b"operation-1" in body
+    assert result.response["dataset_id"] == "dataset-1"
 
 
 def test_graphify_uses_existing_mcp_boundary_and_preserves_edge_confidence(
