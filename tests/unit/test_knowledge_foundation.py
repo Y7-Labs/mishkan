@@ -184,13 +184,15 @@ def test_query_repository_commits_only_available_attributed_bundle(tmp_path: Pat
 
 
 def test_operations_are_idempotent_and_uncertain_effects_are_explicit(tmp_path: Path) -> None:
-    _artifact_service(tmp_path)
+    artifacts = _artifact_service(tmp_path)
     repository = SQLiteKnowledgeRepository(tmp_path / "mishkan.db")
+    request_reference, _ = _artifact(artifacts, b'{"operation":"ingest"}')
     operation = KnowledgeOperation(
         kind=KnowledgeOperationKind.INGEST,
         project_id="project-1",
         source_id="mem0-local",
         request_fingerprint=f"sha256:{hashlib.sha256(b'ingest').hexdigest()}",
+        request_reference=request_reference,
     )
 
     queued = repository.create_operation(operation)

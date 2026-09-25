@@ -16,7 +16,14 @@ from mishkan.knowledge.adapters import (
     Mem0OssAdapter,
     ProviderKnowledgeResult,
 )
-from mishkan.knowledge.models import KnowledgeClass, KnowledgeQuery, KnowledgeScope
+from mishkan.knowledge.models import (
+    KnowledgeClass,
+    KnowledgeOperation,
+    KnowledgeOperationKind,
+    KnowledgeQuery,
+    KnowledgeScope,
+)
+from mishkan.knowledge.operations import ProviderSettlement
 from mishkan.web.network import ConnectionEvidence, HttpExchange
 
 
@@ -184,6 +191,51 @@ def test_mem0_capture_keeps_operation_and_project_metadata(tmp_path: Path) -> No
         "accepted_result": True,
     }
     assert transport.requests[0]["timeout"] == source.operation_timeout_seconds
+
+
+def test_mem0_reconciliation_finds_operation_marker_without_replaying_write(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    source, profile = _source(config, "mem0-local")
+    transport = FakeTransport(
+        [
+            (
+                200,
+                {
+                    "results": [
+                        {
+                            "id": "memory-2",
+                            "metadata": {"mishkan_operation_id": "operation-id"},
+                        }
+                    ]
+                },
+            )
+        ]
+    )
+    operation = KnowledgeOperation(
+        operation_id="11111111-1111-4111-8111-111111111111",
+        kind=KnowledgeOperationKind.CAPTURE,
+        project_id="project-1",
+        source_id="mem0-local",
+        request_fingerprint=f"sha256:{'a' * 64}",
+        request_reference="artifact:22222222-2222-4222-8222-222222222222",
+    )
+    document = transport.responses[0][1]
+    assert isinstance(document, dict)
+    document["results"][0]["metadata"]["mishkan_operation_id"] = str(operation.operation_id)
+
+    result = Mem0OssAdapter(transport).reconcile(
+        operation,
+        source_id="mem0-local",
+        source=source,
+        credentials=("mem0-secret",),
+        network_profile=profile,
+    )
+
+    assert result.settlement is ProviderSettlement.SUCCEEDED
+    assert transport.requests[0]["method"] == "GET"
+    assert transport.requests[0]["url"].endswith("/memories?user_id=project-1")
 
 
 def test_cognee_retrieves_only_raw_chunks_and_never_generated_answers(tmp_path: Path) -> None:

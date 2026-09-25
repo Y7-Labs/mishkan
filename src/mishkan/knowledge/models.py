@@ -323,6 +323,7 @@ class KnowledgeOperation(KnowledgeModel):
     corpus_id: UUID | None = None
     state: KnowledgeOperationState = KnowledgeOperationState.QUEUED
     request_fingerprint: str = Field(pattern=_DIGEST_PATTERN)
+    request_reference: str = Field(pattern=_ARTIFACT_PATTERN)
     provider_operation_id: str | None = Field(default=None, min_length=1, max_length=1_024)
     result_references: tuple[str, ...] = ()
     limitation: str | None = Field(default=None, min_length=1, max_length=2_048)
@@ -364,6 +365,92 @@ class KnowledgeMemoryProposal(KnowledgeModel):
         return values
 
 
+class KnowledgeIngestRequest(KnowledgeModel):
+    """Explicit request to add one immutable body to a semantic corpus."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    operation_id: UUID = Field(default_factory=new_id)
+    project_id: str = Field(min_length=1, max_length=256)
+    source_id: str = Field(min_length=1, max_length=256)
+    corpus_id: UUID
+    content_reference: str = Field(pattern=_ARTIFACT_PATTERN)
+    repository_id: str | None = Field(default=None, min_length=1, max_length=256)
+    repository_revision: str | None = Field(default=None, min_length=1, max_length=512)
+    requested_by: str = Field(min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def repository_identity_is_complete(self) -> Self:
+        if (self.repository_id is None) != (self.repository_revision is None):
+            raise ValueError("repository identity and revision must be provided together")
+        return self
+
+    @property
+    def fingerprint(self) -> str:
+        return _request_fingerprint(self, exclude={"operation_id"})
+
+
+class KnowledgeRefreshRequest(KnowledgeModel):
+    """Explicit refresh request; a query can never construct this implicitly."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    operation_id: UUID = Field(default_factory=new_id)
+    project_id: str = Field(min_length=1, max_length=256)
+    source_id: str = Field(min_length=1, max_length=256)
+    corpus_id: UUID
+    repository_id: str | None = Field(default=None, min_length=1, max_length=256)
+    repository_revision: str | None = Field(default=None, min_length=1, max_length=512)
+    requested_by: str = Field(min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def repository_identity_is_complete(self) -> Self:
+        if (self.repository_id is None) != (self.repository_revision is None):
+            raise ValueError("repository identity and revision must be provided together")
+        return self
+
+    @property
+    def fingerprint(self) -> str:
+        return _request_fingerprint(self, exclude={"operation_id"})
+
+
+class KnowledgeMemoryCaptureRequest(KnowledgeModel):
+    """Explicit accepted-result memory proposal bound to one provider operation."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    operation_id: UUID = Field(default_factory=new_id)
+    source_id: str = Field(min_length=1, max_length=256)
+    requested_by: str = Field(min_length=1, max_length=256)
+    proposal: KnowledgeMemoryProposal
+
+    @property
+    def fingerprint(self) -> str:
+        return _request_fingerprint(self, exclude={"operation_id"})
+
+
+class KnowledgeOperationReconcileRequest(KnowledgeModel):
+    schema_version: Literal["1.0"] = "1.0"
+    operation_id: UUID
+    expected_revision: int = Field(ge=1)
+    requested_by: str = Field(min_length=1, max_length=256)
+
+
+class KnowledgePromotionDecision(KnowledgeModel):
+    schema_version: Literal["1.0"] = "1.0"
+    promotion_id: UUID
+    expected_revision: int = Field(ge=1)
+    disposition: KnowledgePromotionDisposition
+    decided_by: str = Field(min_length=1, max_length=256)
+    policy_fingerprint: str = Field(pattern=_DIGEST_PATTERN)
+
+    @field_validator("disposition")
+    @classmethod
+    def disposition_is_terminal(
+        cls, value: KnowledgePromotionDisposition
+    ) -> KnowledgePromotionDisposition:
+        if value is KnowledgePromotionDisposition.PROPOSED:
+            raise ValueError("promotion decision cannot remain proposed")
+        return value
+
+
 class KnowledgePromotion(KnowledgeModel):
     schema_version: Literal["1.0"] = "1.0"
     promotion_id: UUID = Field(default_factory=new_id)
@@ -402,3 +489,9 @@ class KnowledgePromotion(KnowledgeModel):
         if proposed != (self.policy_fingerprint is None):
             raise ValueError("knowledge promotion policy does not match disposition")
         return self
+
+
+def _request_fingerprint(model: BaseModel, *, exclude: set[str]) -> str:
+    payload = model.model_dump(mode="json", exclude=exclude)
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"

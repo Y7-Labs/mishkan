@@ -275,6 +275,18 @@ class SQLiteKnowledgeRepository:
                         "knowledge operation identity already contains different content",
                     )
                 return current
+            request_artifact = session.get(
+                ArtifactRow,
+                self._artifact_id(durable.request_reference),
+            )
+            if (
+                request_artifact is None
+                or request_artifact.lifecycle != ArtifactLifecycle.AVAILABLE.value
+            ):
+                raise MishkanError(
+                    ErrorCode.ARTIFACT,
+                    "knowledge operation request artifact is unavailable",
+                )
             if (
                 durable.corpus_id is not None
                 and session.get(KnowledgeCorpusRow, str(durable.corpus_id)) is None
@@ -495,6 +507,13 @@ class SQLiteKnowledgeRepository:
                         "knowledge promotion identity already contains different content",
                     )
                 return current
+            for reference in durable.evidence_references:
+                artifact = session.get(ArtifactRow, self._artifact_id(reference))
+                if artifact is None or artifact.lifecycle != ArtifactLifecycle.AVAILABLE.value:
+                    raise MishkanError(
+                        ErrorCode.ARTIFACT,
+                        "knowledge promotion evidence is unavailable",
+                    )
             session.add(
                 KnowledgePromotionRow(
                     id=str(durable.promotion_id),
@@ -542,8 +561,26 @@ class SQLiteKnowledgeRepository:
                     "knowledge promotion revision differs",
                     details={"expected": expected_revision, "current": current.revision},
                 )
-            if current.disposition is not KnowledgePromotionDisposition.PROPOSED:
-                raise MishkanError(ErrorCode.REVISION_MISMATCH, "knowledge promotion is settled")
+            permitted = (
+                current.disposition is KnowledgePromotionDisposition.PROPOSED
+                and disposition
+                in {
+                    KnowledgePromotionDisposition.APPROVED,
+                    KnowledgePromotionDisposition.REJECTED,
+                }
+            ) or (
+                current.disposition is KnowledgePromotionDisposition.APPROVED
+                and disposition is KnowledgePromotionDisposition.REVOKED
+            )
+            if not permitted:
+                raise MishkanError(
+                    ErrorCode.REVISION_MISMATCH,
+                    "knowledge promotion transition is not permitted",
+                    details={
+                        "from": current.disposition.value,
+                        "to": disposition.value,
+                    },
+                )
             decided = current.model_copy(
                 update={
                     "disposition": disposition,

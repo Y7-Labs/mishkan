@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Protocol
+from urllib.parse import urlencode
 
 from mishkan.config.models import KnowledgeSourceConfig, NetworkProfileConfig
 from mishkan.domain.errors import ErrorCode, MishkanError
-from mishkan.knowledge.models import KnowledgeQuery
+from mishkan.knowledge.models import KnowledgeOperation, KnowledgeQuery
 from mishkan.web.adapters import SingleRequestTransport
 from mishkan.web.network import HttpExchange
 
@@ -37,6 +39,21 @@ class ProviderMutationResult:
     provider_operation_id: str | None
     external_record_ids: tuple[str, ...]
     response: dict[str, Any]
+
+
+class ProviderSettlement(StrEnum):
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderReconciliation:
+    settlement: ProviderSettlement
+    provider_operation_id: str | None = None
+    response: dict[str, Any] | None = None
+    limitation: str | None = None
 
 
 class KnowledgeQueryAdapter(Protocol):
@@ -283,6 +300,63 @@ class Mem0OssAdapter(_HttpKnowledgeAdapter):
         )
         return ProviderMutationResult(operation_id, identifiers, document)
 
+    def reconcile(
+        self,
+        operation: KnowledgeOperation,
+        *,
+        source_id: str,
+        source: KnowledgeSourceConfig,
+        credentials: tuple[str, ...],
+        network_profile: NetworkProfileConfig | None,
+    ) -> ProviderReconciliation:
+        """Find an operation marker without replaying the memory write."""
+        query = urlencode({"user_id": operation.project_id})
+        document = self._request_json(
+            "GET",
+            self._endpoint(source, f"memories?{query}"),
+            source_id=source_id,
+            source=source,
+            profile=network_profile,
+            credentials=credentials,
+            payload={},
+            timeout_seconds=source.operation_timeout_seconds,
+        )
+        raw = (
+            document.get("results", document.get("memories", []))
+            if isinstance(document, dict)
+            else document
+        )
+        if not isinstance(raw, list):
+            raise MishkanError(
+                ErrorCode.OUTPUT_CONTRACT,
+                "mem0 reconciliation returned no memory list",
+            )
+        matches = [
+            item
+            for item in raw
+            if isinstance(item, dict)
+            and isinstance(item.get("metadata"), dict)
+            and item["metadata"].get("mishkan_operation_id") == str(operation.operation_id)
+        ]
+        if not matches:
+            return ProviderReconciliation(
+                ProviderSettlement.UNKNOWN,
+                limitation="mem0 operation marker was not present in the bounded result",
+            )
+        identifiers = [str(item["id"]) for item in matches if item.get("id") is not None]
+        return ProviderReconciliation(
+            ProviderSettlement.SUCCEEDED,
+            provider_operation_id=str(operation.operation_id),
+            response={"reconciled": True, "external_record_ids": identifiers},
+        )
+
+    def cancel(self, operation: KnowledgeOperation, **_: Any) -> ProviderReconciliation:
+        del operation
+        return ProviderReconciliation(
+            ProviderSettlement.UNKNOWN,
+            limitation="mem0 memory writes do not expose a cancellable operation",
+        )
+
 
 class CogneeOssAdapter(_HttpKnowledgeAdapter):
     adapter_id = "cognee.oss"
@@ -421,6 +495,21 @@ class CogneeOssAdapter(_HttpKnowledgeAdapter):
             str(provider_id) if provider_id is not None else operation_id,
             (),
             document,
+        )
+
+    def reconcile(self, operation: KnowledgeOperation, **_: Any) -> ProviderReconciliation:
+        """Do not invent a durable Cognee status endpoint when none was proven."""
+        del operation
+        return ProviderReconciliation(
+            ProviderSettlement.UNKNOWN,
+            limitation="Cognee operation settlement is not externally provable",
+        )
+
+    def cancel(self, operation: KnowledgeOperation, **_: Any) -> ProviderReconciliation:
+        del operation
+        return ProviderReconciliation(
+            ProviderSettlement.UNKNOWN,
+            limitation="Cognee operation cancellation is not externally provable",
         )
 
 
