@@ -29,7 +29,11 @@ the completed I06 gate at `2d1f78c` after the final conformance review, local br
 and seven-job Linux/macOS Python 3.11–3.13 matrix passed. I06 is integrated into `develop` at
 `60e3ca7`, whose seven-job integration matrix also passed. The history-preserving synchronization
 checkpoint `8b5a2b3` and the `main` promotion at `e171540` each passed the same seven-job matrix.
-I06 is integrated and closed; I07 is not authorized until the engineer explicitly starts it.
+I06 is integrated and closed. D-045 authorizes I07 Attributed Knowledge and Degraded Operation on
+`feat/i07-attributed-knowledge`. Its active scope is explicit literal, episodic, semantic, and
+structural knowledge; immutable attributed retrieval evidence; project-scoped ingestion; governed
+cross-project promotion; authenticated self-hosted mem0, Cognee, and Graphify integration; and
+useful visible degradation. I08 and later increments remain unauthorized until I07 passes D-046.
 The rejected
 universal workflow, mandatory outcome catalogue, capability-family matrix, static role/tool matrix,
 competing runtime, and private operational deny-list must not return.
