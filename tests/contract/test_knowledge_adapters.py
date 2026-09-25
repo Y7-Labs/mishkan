@@ -13,8 +13,10 @@ from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.knowledge.adapters import (
     CogneeOssAdapter,
     GraphifyMcpAdapter,
+    LiteralKnowledgeAdapter,
     Mem0OssAdapter,
     ProviderKnowledgeResult,
+    ProviderSettlement,
 )
 from mishkan.knowledge.models import (
     KnowledgeClass,
@@ -23,7 +25,6 @@ from mishkan.knowledge.models import (
     KnowledgeQuery,
     KnowledgeScope,
 )
-from mishkan.knowledge.operations import ProviderSettlement
 from mishkan.web.network import ConnectionEvidence, HttpExchange
 
 
@@ -384,3 +385,160 @@ class FakeLiteralPort:
     def query(self, query: KnowledgeQuery, *, source_id: str) -> ProviderKnowledgeResult:
         del query, source_id
         return ProviderKnowledgeResult((), "literal-test-1")
+
+
+def test_literal_adapter_never_accepts_external_credentials(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    source, profile = _source(config, "literal-native")
+    adapter = LiteralKnowledgeAdapter(FakeLiteralPort())
+
+    result = adapter.query(
+        _query(KnowledgeClass.LITERAL),
+        source_id="literal-native",
+        source=source,
+        credentials=(),
+        network_profile=profile,
+    )
+    assert result.provider_schema == "literal-test-1"
+
+    with pytest.raises(MishkanError) as caught:
+        adapter.query(
+            _query(KnowledgeClass.LITERAL),
+            source_id="literal-native",
+            source=source,
+            credentials=("must-not-cross-boundary",),
+            network_profile=profile,
+        )
+    assert caught.value.envelope.code is ErrorCode.TOOL_SCHEMA
+
+
+def test_http_adapter_rejects_missing_governance_and_oversized_results(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    source, profile = _source(config, "mem0-local")
+    query = _query(KnowledgeClass.EPISODIC)
+
+    with pytest.raises(MishkanError) as no_profile:
+        Mem0OssAdapter(FakeTransport([])).query(
+            query,
+            source_id="mem0-local",
+            source=source,
+            credentials=("secret",),
+            network_profile=None,
+        )
+    assert no_profile.value.envelope.code is ErrorCode.CONFIGURATION
+
+    with pytest.raises(MishkanError) as credential_count:
+        Mem0OssAdapter(FakeTransport([])).query(
+            query,
+            source_id="mem0-local",
+            source=source,
+            credentials=(),
+            network_profile=profile,
+        )
+    assert credential_count.value.envelope.code is ErrorCode.AUTHORIZATION_MISSING
+
+    headerless = source.model_copy(update={"credential_header": None})
+    with pytest.raises(MishkanError) as header:
+        Mem0OssAdapter(FakeTransport([])).query(
+            query,
+            source_id="mem0-local",
+            source=headerless,
+            credentials=("secret",),
+            network_profile=profile,
+        )
+    assert header.value.envelope.code is ErrorCode.TOOL_SCHEMA
+
+    without_endpoint = source.model_copy(update={"endpoint": None})
+    with pytest.raises(MishkanError) as endpoint:
+        Mem0OssAdapter(FakeTransport([])).query(
+            query,
+            source_id="mem0-local",
+            source=without_endpoint,
+            credentials=("secret",),
+            network_profile=profile,
+        )
+    assert endpoint.value.envelope.code is ErrorCode.CONFIGURATION
+
+    bounded = source.model_copy(update={"max_result_bytes": 1})
+    with pytest.raises(MishkanError) as oversized:
+        Mem0OssAdapter(FakeTransport([(200, {"results": []})])).query(
+            query,
+            source_id="mem0-local",
+            source=bounded,
+            credentials=("secret",),
+            network_profile=profile,
+        )
+    assert oversized.value.envelope.code is ErrorCode.OUTPUT_CONTRACT
+
+
+def test_mem0_rejects_drift_and_reports_non_replayable_settlement(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    source, profile = _source(config, "mem0-local")
+    query = _query(KnowledgeClass.EPISODIC)
+
+    with pytest.raises(MishkanError) as missing_results:
+        Mem0OssAdapter(FakeTransport([(200, {"unexpected": []})])).query(
+            query,
+            source_id="mem0-local",
+            source=source,
+            credentials=("secret",),
+            network_profile=profile,
+        )
+    assert missing_results.value.envelope.code is ErrorCode.OUTPUT_CONTRACT
+
+    with pytest.raises(MishkanError) as invalid_item:
+        Mem0OssAdapter(FakeTransport([(200, {"results": [{"memory": 7}]})])).query(
+            query,
+            source_id="mem0-local",
+            source=source,
+            credentials=("secret",),
+            network_profile=profile,
+        )
+    assert invalid_item.value.envelope.code is ErrorCode.OUTPUT_CONTRACT
+
+    operation = KnowledgeOperation(
+        operation_id="11111111-1111-4111-8111-111111111111",
+        kind=KnowledgeOperationKind.CAPTURE,
+        project_id="project-1",
+        source_id="mem0-local",
+        request_fingerprint=f"sha256:{'a' * 64}",
+        request_reference="artifact:22222222-2222-4222-8222-222222222222",
+    )
+    reconciliation = Mem0OssAdapter(FakeTransport([(200, {"results": []})])).reconcile(
+        operation,
+        source_id="mem0-local",
+        source=source,
+        credentials=("secret",),
+        network_profile=profile,
+    )
+    assert reconciliation.settlement is ProviderSettlement.UNKNOWN
+    assert (
+        Mem0OssAdapter(FakeTransport([])).cancel(operation).settlement is ProviderSettlement.UNKNOWN
+    )
+
+
+def test_cognee_normalizes_string_chunks_and_never_invents_operation_settlement(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    source, profile = _source(config, "cognee-local")
+    adapter = CogneeOssAdapter(FakeTransport([(200, [{"search_result": ["raw chunk"]}])]))
+    result = adapter.query(
+        _query(KnowledgeClass.SEMANTIC),
+        source_id="cognee-local",
+        source=source,
+        credentials=("secret",),
+        network_profile=profile,
+    )
+    assert result.records[0].content == b"raw chunk"
+
+    operation = KnowledgeOperation(
+        operation_id="11111111-1111-4111-8111-111111111111",
+        kind=KnowledgeOperationKind.INGEST,
+        project_id="project-1",
+        source_id="cognee-local",
+        request_fingerprint=f"sha256:{'b' * 64}",
+        request_reference="artifact:22222222-2222-4222-8222-222222222222",
+    )
+    assert adapter.reconcile(operation).settlement is ProviderSettlement.UNKNOWN
+    assert adapter.cancel(operation).settlement is ProviderSettlement.UNKNOWN

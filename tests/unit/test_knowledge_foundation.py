@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -270,3 +271,214 @@ def test_promotion_decision_is_separate_and_attributable(tmp_path: Path) -> None
     assert decided.disposition is KnowledgePromotionDisposition.APPROVED
     assert decided.decided_by == "CTO"
     assert decided.decided_at is not None
+
+
+def test_repository_rejects_query_identity_attempt_and_terminal_conflicts(tmp_path: Path) -> None:
+    artifacts = _artifact_service(tmp_path)
+    repository = SQLiteKnowledgeRepository(tmp_path / "mishkan.db")
+    query = KnowledgeQuery(
+        knowledge_class=KnowledgeClass.LITERAL,
+        question="Find durable state",
+        scope=_scope(),
+    )
+    repository.start_query(query)
+
+    with pytest.raises(MishkanError) as duplicate:
+        repository.start_query(query.model_copy(update={"question": "Different content"}))
+    assert duplicate.value.envelope.code is ErrorCode.DUPLICATE_RESULT
+
+    orphan = KnowledgeSourceAttempt(
+        query_id=uuid4(),
+        source_id="literal-native",
+        state=KnowledgeAttemptState.FAILED,
+        latency_ms=0,
+        limitation="missing query",
+    )
+    with pytest.raises(MishkanError) as missing_query:
+        repository.record_attempt(orphan)
+    assert missing_query.value.envelope.code is ErrorCode.CONTEXT
+
+    attempt = KnowledgeSourceAttempt(
+        query_id=query.query_id,
+        source_id="literal-native",
+        state=KnowledgeAttemptState.EMPTY,
+        latency_ms=1,
+    )
+    repository.record_attempt(attempt)
+    with pytest.raises(MishkanError) as attempt_conflict:
+        repository.record_attempt(attempt.model_copy(update={"limitation": "changed"}))
+    assert attempt_conflict.value.envelope.code is ErrorCode.DUPLICATE_RESULT
+
+    absent_reference = "artifact:11111111-1111-4111-8111-111111111111"
+    unavailable = KnowledgeBundle(
+        query=query,
+        items=(),
+        attempts=(attempt,),
+        bundle_reference=absent_reference,
+        bundle_digest=f"sha256:{'a' * 64}",
+    )
+    with pytest.raises(MishkanError) as artifact:
+        repository.complete_query(unavailable)
+    assert artifact.value.envelope.code is ErrorCode.ARTIFACT
+
+    with pytest.raises(MishkanError) as invalid_terminal:
+        repository.fail_query(
+            query.query_id,
+            state=KnowledgeQueryState.RUNNING,
+            limitation_codes=(),
+        )
+    assert invalid_terminal.value.envelope.code is ErrorCode.OUTPUT_CONTRACT
+
+    failed = repository.fail_query(
+        query.query_id,
+        state=KnowledgeQueryState.FAILED,
+        limitation_codes=("ERR-DEP-002",),
+    )
+    assert (
+        repository.fail_query(
+            query.query_id,
+            state=KnowledgeQueryState.CANCELLED,
+            limitation_codes=("ignored",),
+        )
+        == failed
+    )
+
+    with pytest.raises(MishkanError) as absent:
+        repository.query(uuid4())
+    assert absent.value.envelope.code is ErrorCode.CONTEXT
+
+    assert repository.list_queries(project_id="project-1") == (failed,)
+    assert repository.list_queries(project_id="other-project") == ()
+    for offset, limit in ((-1, 1), (0, 0), (0, 1_001)):
+        with pytest.raises(MishkanError) as bounds:
+            repository.list_queries(offset=offset, limit=limit)
+        assert bounds.value.envelope.code is ErrorCode.OUTPUT_CONTRACT
+
+    # Keep the helper live in this branch: it also proves artifacts are not
+    # accidentally removed by a failed canonical-bundle commit.
+    assert _artifact(artifacts, b"still available")[0].startswith("artifact:")
+
+
+def test_repository_rejects_invalid_operation_transitions_and_references(tmp_path: Path) -> None:
+    artifacts = _artifact_service(tmp_path)
+    repository = SQLiteKnowledgeRepository(tmp_path / "mishkan.db")
+    request_reference, _ = _artifact(artifacts, b"{}")
+    operation = KnowledgeOperation(
+        kind=KnowledgeOperationKind.INGEST,
+        project_id="project-1",
+        source_id="cognee-local",
+        request_fingerprint=f"sha256:{'c' * 64}",
+        request_reference=request_reference,
+    )
+
+    with pytest.raises(MishkanError) as initial_state:
+        repository.create_operation(
+            operation.model_copy(update={"state": KnowledgeOperationState.RUNNING})
+        )
+    assert initial_state.value.envelope.code is ErrorCode.OUTPUT_CONTRACT
+
+    missing_request = operation.model_copy(
+        update={
+            "operation_id": uuid4(),
+            "request_reference": "artifact:11111111-1111-4111-8111-111111111111",
+        }
+    )
+    with pytest.raises(MishkanError) as artifact:
+        repository.create_operation(missing_request)
+    assert artifact.value.envelope.code is ErrorCode.ARTIFACT
+
+    queued = repository.create_operation(operation)
+    with pytest.raises(MishkanError) as duplicate:
+        repository.create_operation(
+            operation.model_copy(update={"request_fingerprint": f"sha256:{'d' * 64}"})
+        )
+    assert duplicate.value.envelope.code is ErrorCode.DUPLICATE_RESULT
+
+    with pytest.raises(MishkanError) as absent:
+        repository.transition_operation(
+            uuid4(), expected_revision=1, state=KnowledgeOperationState.RUNNING
+        )
+    assert absent.value.envelope.code is ErrorCode.CONTEXT
+
+    with pytest.raises(MishkanError) as transition:
+        repository.transition_operation(
+            queued.operation_id,
+            expected_revision=queued.revision,
+            state=KnowledgeOperationState.SUCCEEDED,
+        )
+    assert transition.value.envelope.code is ErrorCode.REVISION_MISMATCH
+
+    with pytest.raises(MishkanError) as result_artifact:
+        repository.transition_operation(
+            queued.operation_id,
+            expected_revision=queued.revision,
+            state=KnowledgeOperationState.RUNNING,
+            result_references=("artifact:11111111-1111-4111-8111-111111111111",),
+        )
+    assert result_artifact.value.envelope.code is ErrorCode.ARTIFACT
+
+    assert repository.list_operations(project_id="project-1") == (queued,)
+    assert repository.list_operations(project_id="other-project") == ()
+    with pytest.raises(MishkanError) as missing_operation:
+        repository.operation(uuid4())
+    assert missing_operation.value.envelope.code is ErrorCode.CONTEXT
+
+
+def test_repository_rejects_invalid_corpus_and_promotion_lifecycle(tmp_path: Path) -> None:
+    artifacts = _artifact_service(tmp_path)
+    repository = SQLiteKnowledgeRepository(tmp_path / "mishkan.db")
+    corpus = KnowledgeCorpus(
+        project_id="project-1",
+        source_id="graphify-local",
+        knowledge_class=KnowledgeClass.STRUCTURAL,
+        external_identity="graph",
+    )
+    with pytest.raises(MishkanError) as revision:
+        repository.put_corpus(corpus.model_copy(update={"revision": 1}), expected_revision=0)
+    assert revision.value.envelope.code is ErrorCode.REVISION_MISMATCH
+
+    with pytest.raises(MishkanError) as snapshot:
+        repository.put_corpus(
+            corpus.model_copy(
+                update={"snapshot_reference": "artifact:11111111-1111-4111-8111-111111111111"}
+            ),
+            expected_revision=0,
+        )
+    assert snapshot.value.envelope.code is ErrorCode.ARTIFACT
+    with pytest.raises(MishkanError) as missing_corpus:
+        repository.corpus(uuid4())
+    assert missing_corpus.value.envelope.code is ErrorCode.CONTEXT
+
+    evidence, _ = _artifact(artifacts, b"promotion fixture")
+    proposal = KnowledgePromotion(
+        item_id=uuid4(),
+        source_project_id="project-1",
+        target_scope="organization",
+        rationale="Attributed reusable evidence",
+        evidence_references=(evidence,),
+        proposed_by="Knowledge_Curator",
+    )
+    with pytest.raises(MishkanError) as invalid_proposal:
+        repository.propose_promotion(
+            proposal.model_copy(update={"disposition": KnowledgePromotionDisposition.APPROVED})
+        )
+    assert invalid_proposal.value.envelope.code is ErrorCode.OUTPUT_CONTRACT
+
+    proposed = repository.propose_promotion(proposal)
+    with pytest.raises(MishkanError) as invalid_decision:
+        repository.decide_promotion(
+            proposal.promotion_id,
+            expected_revision=proposed.revision,
+            disposition=KnowledgePromotionDisposition.PROPOSED,
+            decided_by="CTO",
+            policy_fingerprint=f"sha256:{'e' * 64}",
+        )
+    assert invalid_decision.value.envelope.code is ErrorCode.OUTPUT_CONTRACT
+
+    with pytest.raises(MishkanError) as absent_promotion:
+        repository.promotion(uuid4())
+    assert absent_promotion.value.envelope.code is ErrorCode.CONTEXT
+    assert repository.list_promotions(project_id="project-1") == (proposed,)
+    assert repository.list_promotions(project_id="other-project") == ()
+
+    assert evidence.startswith("artifact:")
