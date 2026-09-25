@@ -1,0 +1,71 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "accepted_result_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Accepted Result Id",
+      "type": "string"
+    },
+    "agent_identity": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Agent Identity",
+      "type": "string"
+    },
+    "evidence_references": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Evidence References",
+      "type": "array"
+    },
+    "memory": {
+      "maxLength": 16384,
+      "minLength": 1,
+      "title": "Memory",
+      "type": "string"
+    },
+    "project_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Project Id",
+      "type": "string"
+    },
+    "proposal_id": {
+      "format": "uuid",
+      "title": "Proposal Id",
+      "type": "string"
+    },
+    "run_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Run Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "task_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Task Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "agent_identity",
+    "run_id",
+    "task_id",
+    "accepted_result_id",
+    "memory",
+    "evidence_references"
+  ],
+  "title": "KnowledgeMemoryProposal",
+  "type": "object"
+}

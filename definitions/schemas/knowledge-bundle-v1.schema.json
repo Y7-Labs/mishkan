@@ -1,0 +1,593 @@
+{
+  "$defs": {
+    "KnowledgeAttemptState": {
+      "enum": [
+        "succeeded",
+        "empty",
+        "unavailable",
+        "incompatible",
+        "failed",
+        "cancelled"
+      ],
+      "title": "KnowledgeAttemptState",
+      "type": "string"
+    },
+    "KnowledgeClass": {
+      "enum": [
+        "literal",
+        "episodic",
+        "semantic",
+        "structural"
+      ],
+      "title": "KnowledgeClass",
+      "type": "string"
+    },
+    "KnowledgeItem": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
+        },
+        "content_digest": {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "title": "Content Digest",
+          "type": "string"
+        },
+        "content_reference": {
+          "pattern": "^artifact:[0-9a-f-]{36}$",
+          "title": "Content Reference",
+          "type": "string"
+        },
+        "content_transformed": {
+          "default": false,
+          "title": "Content Transformed",
+          "type": "boolean"
+        },
+        "external_record_id": {
+          "anyOf": [
+            {
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "External Record Id"
+        },
+        "inspection_findings": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Inspection Findings",
+          "type": "array"
+        },
+        "item_id": {
+          "format": "uuid",
+          "title": "Item Id",
+          "type": "string"
+        },
+        "knowledge_class": {
+          "$ref": "#/$defs/KnowledgeClass"
+        },
+        "media_type": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Media Type",
+          "type": "string"
+        },
+        "rank": {
+          "minimum": 1,
+          "title": "Rank",
+          "type": "integer"
+        },
+        "ranking_basis": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Ranking Basis",
+          "type": "string"
+        },
+        "retrieved_at": {
+          "format": "date-time",
+          "title": "Retrieved At",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/KnowledgeScope"
+        },
+        "score": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Score"
+        },
+        "source_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_locator": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Source Locator",
+          "type": "string"
+        },
+        "source_revision": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Revision"
+        },
+        "staleness": {
+          "$ref": "#/$defs/KnowledgeStaleness"
+        },
+        "staleness_reason": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Staleness Reason"
+        },
+        "trust": {
+          "const": "untrusted_evidence",
+          "default": "untrusted_evidence",
+          "title": "Trust",
+          "type": "string"
+        }
+      },
+      "required": [
+        "knowledge_class",
+        "source_id",
+        "scope",
+        "content_reference",
+        "content_digest",
+        "media_type",
+        "source_locator",
+        "staleness",
+        "ranking_basis",
+        "rank"
+      ],
+      "title": "KnowledgeItem",
+      "type": "object"
+    },
+    "KnowledgeQuery": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "deadline_seconds": {
+          "default": 30.0,
+          "exclusiveMinimum": 0,
+          "maximum": 3600,
+          "title": "Deadline Seconds",
+          "type": "number"
+        },
+        "knowledge_class": {
+          "$ref": "#/$defs/KnowledgeClass"
+        },
+        "max_bytes": {
+          "default": 262144,
+          "maximum": 67108864,
+          "minimum": 1,
+          "title": "Max Bytes",
+          "type": "integer"
+        },
+        "max_results": {
+          "default": 10,
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Max Results",
+          "type": "integer"
+        },
+        "preferred_sources": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Preferred Sources",
+          "type": "array"
+        },
+        "query_id": {
+          "format": "uuid",
+          "title": "Query Id",
+          "type": "string"
+        },
+        "question": {
+          "maxLength": 16384,
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/KnowledgeScope"
+        },
+        "structure_arguments": {
+          "additionalProperties": true,
+          "title": "Structure Arguments",
+          "type": "object"
+        },
+        "structure_operation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnowledgeStructureOperation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "knowledge_class",
+        "question",
+        "scope"
+      ],
+      "title": "KnowledgeQuery",
+      "type": "object"
+    },
+    "KnowledgeScope": {
+      "additionalProperties": false,
+      "description": "Exact execution and organizational scope for one knowledge request.",
+      "properties": {
+        "agent_identity": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agent Identity"
+        },
+        "context_revision": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Context Revision",
+          "type": "string"
+        },
+        "mission_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mission Id"
+        },
+        "project_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Project Id",
+          "type": "string"
+        },
+        "repository_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repository Id"
+        },
+        "repository_revision": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repository Revision"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run Id"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        }
+      },
+      "required": [
+        "project_id",
+        "context_revision"
+      ],
+      "title": "KnowledgeScope",
+      "type": "object"
+    },
+    "KnowledgeSourceAttempt": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": {
+          "format": "uuid",
+          "title": "Attempt Id",
+          "type": "string"
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Code"
+        },
+        "latency_ms": {
+          "minimum": 0,
+          "title": "Latency Ms",
+          "type": "number"
+        },
+        "limitation": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limitation"
+        },
+        "provider_schema": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Schema"
+        },
+        "query_id": {
+          "format": "uuid",
+          "title": "Query Id",
+          "type": "string"
+        },
+        "recorded_at": {
+          "format": "date-time",
+          "title": "Recorded At",
+          "type": "string"
+        },
+        "result_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Result Count",
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Source Id",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/KnowledgeAttemptState"
+        }
+      },
+      "required": [
+        "query_id",
+        "source_id",
+        "state",
+        "latency_ms"
+      ],
+      "title": "KnowledgeSourceAttempt",
+      "type": "object"
+    },
+    "KnowledgeStaleness": {
+      "enum": [
+        "current",
+        "stale",
+        "not_applicable",
+        "unknown"
+      ],
+      "title": "KnowledgeStaleness",
+      "type": "string"
+    },
+    "KnowledgeStructureOperation": {
+      "enum": [
+        "query_graph",
+        "get_node",
+        "get_neighbors",
+        "shortest_path",
+        "graph_stats",
+        "graphify_callers",
+        "graphify_callees",
+        "graphify_trace",
+        "graphify_impact",
+        "graphify_rank_files",
+        "god_nodes"
+      ],
+      "title": "KnowledgeStructureOperation",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "attempts": {
+      "items": {
+        "$ref": "#/$defs/KnowledgeSourceAttempt"
+      },
+      "title": "Attempts",
+      "type": "array"
+    },
+    "bundle_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Bundle Digest",
+      "type": "string"
+    },
+    "bundle_id": {
+      "format": "uuid",
+      "title": "Bundle Id",
+      "type": "string"
+    },
+    "bundle_reference": {
+      "pattern": "^artifact:[0-9a-f-]{36}$",
+      "title": "Bundle Reference",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "degraded": {
+      "default": false,
+      "title": "Degraded",
+      "type": "boolean"
+    },
+    "items": {
+      "items": {
+        "$ref": "#/$defs/KnowledgeItem"
+      },
+      "title": "Items",
+      "type": "array"
+    },
+    "limitations": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "query": {
+      "$ref": "#/$defs/KnowledgeQuery"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "unavailable_sources": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Unavailable Sources",
+      "type": "array"
+    }
+  },
+  "required": [
+    "query",
+    "items",
+    "attempts",
+    "bundle_reference",
+    "bundle_digest"
+  ],
+  "title": "KnowledgeBundle",
+  "type": "object"
+}
