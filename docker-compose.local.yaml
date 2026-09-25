@@ -1,0 +1,160 @@
+name: mishkan-local
+
+services:
+  mem0-postgres:
+    image: pgvector/pgvector:pg17@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f
+    environment:
+      POSTGRES_USER: ${MISHKAN_MEM0_POSTGRES_USER:-mem0}
+      POSTGRES_PASSWORD: ${MISHKAN_MEM0_POSTGRES_PASSWORD:?set MISHKAN_MEM0_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${MISHKAN_MEM0_POSTGRES_DB:-mem0}
+    volumes:
+      - mem0-postgres:/var/lib/postgresql/data
+      - ./deploy/knowledge/mem0-init-db.sh:/docker-entrypoint-initdb.d/10-mem0-app.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -q -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  mem0:
+    build:
+      context: .
+      dockerfile: deploy/knowledge/mem0.Dockerfile
+    ports:
+      - "127.0.0.1:7776:8000"
+    environment:
+      POSTGRES_HOST: mem0-postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${MISHKAN_MEM0_POSTGRES_USER:-mem0}
+      POSTGRES_PASSWORD: ${MISHKAN_MEM0_POSTGRES_PASSWORD:?set MISHKAN_MEM0_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${MISHKAN_MEM0_POSTGRES_DB:-mem0}
+      APP_DB_NAME: mem0_app
+      ADMIN_API_KEY: ${MISHKAN_MEM0_API_KEY:?set MISHKAN_MEM0_API_KEY}
+      JWT_SECRET: ${MISHKAN_MEM0_JWT_SECRET:?set MISHKAN_MEM0_JWT_SECRET}
+      AUTH_DISABLED: "false"
+      MEM0_DEFAULT_LLM_PROVIDER: ollama
+      MEM0_DEFAULT_EMBEDDER_PROVIDER: ollama
+      MEM0_DEFAULT_LLM_MODEL: ${MISHKAN_MEM0_OLLAMA_MODEL:-qwen2.5:1.5b}
+      MEM0_DEFAULT_EMBEDDER_MODEL: ${MISHKAN_MEM0_EMBED_MODEL:-nomic-embed-text}
+      OLLAMA_BASE_URL: ${MISHKAN_OLLAMA_ENDPOINT:-http://host.docker.internal:11434}
+      HISTORY_DB_PATH: /opt/mem0/server/history/history.db
+      MEM0_TELEMETRY: "false"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - mem0-history:/opt/mem0/server/history
+    depends_on:
+      mem0-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -H 'X-API-Key: '$$ADMIN_API_KEY http://127.0.0.1:8000/configure >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+    restart: unless-stopped
+
+  cognee:
+    build:
+      context: .
+      dockerfile: deploy/knowledge/cognee.Dockerfile
+    ports:
+      - "127.0.0.1:7777:8000"
+    environment:
+      REQUIRE_AUTHENTICATION: "true"
+      ENABLE_BACKEND_ACCESS_CONTROL: "true"
+      DEFAULT_USER_EMAIL: ${MISHKAN_COGNEE_USER:?set MISHKAN_COGNEE_USER}
+      DEFAULT_USER_PASSWORD: ${MISHKAN_COGNEE_PASSWORD:?set MISHKAN_COGNEE_PASSWORD}
+      LLM_API_KEY: ollama
+      LLM_MODEL: ${MISHKAN_COGNEE_OLLAMA_MODEL:-qwen2.5:1.5b}
+      LLM_PROVIDER: ollama
+      LLM_ENDPOINT: ${MISHKAN_OLLAMA_ENDPOINT:-http://host.docker.internal:11434}
+      EMBEDDING_PROVIDER: ollama
+      EMBEDDING_MODEL: ${MISHKAN_COGNEE_EMBED_MODEL:-nomic-embed-text:latest}
+      EMBEDDING_ENDPOINT: ${MISHKAN_OLLAMA_EMBED_ENDPOINT:-http://host.docker.internal:11434/api/embed}
+      EMBEDDING_DIMENSIONS: ${MISHKAN_COGNEE_EMBED_DIMENSIONS:-768}
+      SYSTEM_ROOT_DIRECTORY: /var/lib/cognee/system
+      DATA_ROOT_DIRECTORY: /var/lib/cognee/data
+      TELEMETRY_DISABLED: "1"
+      COGNEE_LOG_SEARCH_HISTORY: "false"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - cognee-system:/var/lib/cognee/system
+      - cognee-data:/var/lib/cognee/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+    restart: unless-stopped
+
+  graphify:
+    build:
+      context: .
+      dockerfile: deploy/knowledge/graphify.Dockerfile
+    command:
+      - --graph
+      - /graphs/graph.json
+      - --transport
+      - http
+      - --host
+      - 0.0.0.0
+      - --port
+      - "7778"
+      - --api-key
+      - ${MISHKAN_GRAPHIFY_API_KEY:?set MISHKAN_GRAPHIFY_API_KEY}
+    ports:
+      - "127.0.0.1:7778:7778"
+    volumes:
+      - graphify-data:/graphs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 7778), 2).close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  mishkand:
+    build:
+      context: .
+      dockerfile: deploy/knowledge/mishkan.Dockerfile
+    ports:
+      - "127.0.0.1:8888:18888"
+    environment:
+      MISHKAN_MEM0_API_KEY: ${MISHKAN_MEM0_API_KEY:?set MISHKAN_MEM0_API_KEY}
+      MISHKAN_COGNEE_BEARER: ${MISHKAN_COGNEE_BEARER:?set MISHKAN_COGNEE_BEARER}
+      MISHKAN_GRAPHIFY_API_KEY: ${MISHKAN_GRAPHIFY_API_KEY:?set MISHKAN_GRAPHIFY_API_KEY}
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    depends_on:
+      mem0:
+        condition: service_healthy
+      cognee:
+        condition: service_healthy
+      graphify:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8888/v1/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:0.12.3@sha256:c622a7adec67cf5bd7fe1802b7e26aa583a955a54e91d132889301f50c3e0bd0
+    profiles: [container-ollama]
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  cognee-data:
+  cognee-system:
+  graphify-data:
+  mem0-history:
+  mem0-postgres:
+  ollama-data:
