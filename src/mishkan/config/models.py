@@ -737,6 +737,7 @@ class KnowledgeSourceConfig(StrictConfigModel):
 
 class KnowledgeConfig(StrictConfigModel):
     staging_root: Path
+    inspection_profile: str = Field(min_length=1, max_length=1_024)
     sources: dict[str, KnowledgeSourceConfig] = Field(min_length=1)
     selection_order: dict[KnowledgeClass, tuple[str, ...]] = Field(min_length=1)
     literal_fallback: bool

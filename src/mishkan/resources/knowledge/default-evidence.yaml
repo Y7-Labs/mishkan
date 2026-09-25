@@ -1,0 +1,21 @@
+schema_version: "1.0"
+profile_id: bundled.knowledge-evidence
+revision: "1"
+adoption_authority: MISHKAN release
+rules:
+  - rule_id: private-key-material
+    category: secret
+    pattern: "-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----"
+    action: block
+  - rule_id: credential-assignment
+    category: secret
+    pattern: "(?i)(api[_-]?key|secret|password)\\s*[:=]\\s*[^\\s,;]{8,}"
+    action: block
+  - rule_id: email-address
+    category: pii
+    pattern: "(?i)\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b"
+    action: mark
+  - rule_id: prompt-override-language
+    category: instruction_like
+    pattern: "(?i)\\b(ignore|disregard|override)\\s+(all|any|the|your)?\\s*(previous|prior|system|developer)\\s+(instructions?|prompts?|rules?)\\b"
+    action: mark

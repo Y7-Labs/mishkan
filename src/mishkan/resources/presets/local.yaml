@@ -253,6 +253,7 @@ mcp:
   task_poll_max_seconds: 5.0
 knowledge:
   staging_root: .mishkan/knowledge
+  inspection_profile: package://mishkan.resources.knowledge/default-evidence.yaml
   sources:
     literal-native:
       knowledge_class: literal

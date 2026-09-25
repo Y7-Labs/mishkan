@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import unicodedata
 from datetime import datetime
 from enum import StrEnum
 from typing import Literal, Self
@@ -204,6 +205,8 @@ class KnowledgeItem(KnowledgeModel):
     rank: int = Field(ge=1)
     score: float | None = None
     confidence: str | None = Field(default=None, min_length=1, max_length=128)
+    inspection_findings: tuple[str, ...] = ()
+    content_transformed: bool = False
     retrieved_at: datetime = Field(default_factory=utc_now)
     trust: Literal["untrusted_evidence"] = "untrusted_evidence"
 
@@ -211,6 +214,31 @@ class KnowledgeItem(KnowledgeModel):
     @classmethod
     def retrieved_at_is_aware(cls, value: datetime) -> datetime:
         return require_aware(value)
+
+    @field_validator(
+        "external_record_id",
+        "source_locator",
+        "source_revision",
+        "ranking_basis",
+        "confidence",
+    )
+    @classmethod
+    def provider_identity_is_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if unicodedata.normalize("NFC", value) != value or any(ord(char) < 32 for char in value):
+            raise ValueError("knowledge provider identity contains unsafe characters")
+        return value
+
+    @field_validator("inspection_findings")
+    @classmethod
+    def inspection_findings_are_safe(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if len(values) != len(set(values)) or any(
+            not value or len(value) > 256 or any(ord(char) < 32 for char in value)
+            for value in values
+        ):
+            raise ValueError("knowledge inspection findings must be unique safe identifiers")
+        return values
 
     @model_validator(mode="after")
     def staleness_is_explained(self) -> Self:

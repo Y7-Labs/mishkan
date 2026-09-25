@@ -335,7 +335,9 @@ class CogneeOssAdapter(_HttpKnowledgeAdapter):
                 identifier = str(item["id"]) if item.get("id") is not None else None
                 raw_score = item.get("score")
                 score = float(raw_score) if isinstance(raw_score, (int, float)) else None
-                revision = str(item["updated_at"]) if item.get("updated_at") else None
+                revision = (
+                    str(item["repository_revision"]) if item.get("repository_revision") else None
+                )
             else:
                 raise MishkanError(
                     ErrorCode.OUTPUT_CONTRACT,
@@ -471,6 +473,7 @@ class GraphifyMcpAdapter:
                 ErrorCode.OUTPUT_CONTRACT,
                 "Graphify result exceeds the configured knowledge bound",
             )
+        source_revision = document.get("repository_revision", document.get("indexed_revision"))
         return ProviderKnowledgeResult(
             (
                 RawKnowledgeRecord(
@@ -478,7 +481,7 @@ class GraphifyMcpAdapter:
                     content=content,
                     media_type="application/json",
                     source_locator=f"graphify:{source.mcp_connection}:{primitive}",
-                    source_revision=query.scope.repository_revision,
+                    source_revision=str(source_revision) if source_revision is not None else None,
                     ranking_basis=f"Graphify {primitive} traversal",
                     confidence="provider edge confidence retained in content",
                 ),
