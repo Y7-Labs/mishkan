@@ -109,6 +109,8 @@ from mishkan.events import (
 from mishkan.execution import CursorRead, ExecutionRequest, ExecutionSession, SessionSupervisor
 from mishkan.knowledge import (
     KnowledgeOperation,
+    KnowledgeQueryState,
+    KnowledgeSourceAttempt,
 )
 from mishkan.knowledge.adapters import (
     CogneeOssAdapter,
@@ -125,6 +127,7 @@ from mishkan.knowledge.operations import KnowledgeMutationService, SQLiteAccepte
 from mishkan.knowledge.repository import SQLiteKnowledgeRepository
 from mishkan.knowledge.runtime import (
     DaemonKnowledgePolicy,
+    GraphifyCliRefreshPort,
     GraphifyMcpKnowledgePort,
     RepositoryLiteralKnowledgePort,
 )
@@ -392,7 +395,10 @@ def _require_knowledge(
     return repository, service, mutations
 
 
-def _knowledge_source_projection(config: MishkanConfig) -> list[dict[str, object]]:
+def _knowledge_source_projection(
+    config: MishkanConfig,
+    observed: Mapping[str, KnowledgeSourceAttempt] | None = None,
+) -> list[dict[str, object]]:
     knowledge = config.knowledge
     if knowledge is None:
         return []
@@ -401,8 +407,11 @@ def _knowledge_source_projection(config: MishkanConfig) -> list[dict[str, object
         for knowledge_class, source_ids in knowledge.selection_order.items()
         for index, source_id in enumerate(source_ids)
     }
-    return [
-        {
+    observations = observed or {}
+    projection: list[dict[str, object]] = []
+    for source_id, source in sorted(knowledge.sources.items()):
+        attempt = observations.get(source_id)
+        item: dict[str, object] = {
             "source_id": source_id,
             "knowledge_class": source.knowledge_class.value,
             "adapter": source.adapter,
@@ -410,10 +419,13 @@ def _knowledge_source_projection(config: MishkanConfig) -> list[dict[str, object
             "cost_class": source.cost_class.value,
             "disclosure_profile": source.disclosure_profile,
             "selection_index": selection.get(source_id, ("", -1))[1],
-            "health": "configured_unobserved",
+            "health": attempt.state.value if attempt is not None else "configured_unobserved",
         }
-        for source_id, source in sorted(knowledge.sources.items())
-    ]
+        if attempt is not None:
+            item["observed_at"] = attempt.recorded_at.isoformat()
+            item["latency_ms"] = attempt.latency_ms
+        projection.append(item)
+    return projection
 
 
 def create_app(
@@ -669,6 +681,26 @@ def create_app(
             policy_gate=knowledge_policy,
             credential_resolver=credential_resolver,
         )
+        graph_refresh = None
+        if config.knowledge.graph_refresh is not None:
+            structural_sources = tuple(
+                source
+                for source in config.knowledge.sources.values()
+                if source.enabled and source.knowledge_class.value == "structural"
+            )
+            if structural_sources:
+                graph_refresh = GraphifyCliRefreshPort(
+                    paths.workspace,
+                    config.knowledge.graph_refresh,
+                    supervisor,
+                    artifacts,
+                    staging_root=config.knowledge.staging_root,
+                    max_graph_bytes=max(source.max_result_bytes for source in structural_sources),
+                    poll_seconds=config.knowledge.operation_poll_seconds,
+                    operation_timeout_seconds=max(
+                        source.operation_timeout_seconds for source in structural_sources
+                    ),
+                )
         knowledge_mutations = KnowledgeMutationService(
             config.knowledge,
             knowledge_repository,
@@ -681,6 +713,7 @@ def create_app(
                 paths.database,
                 busy_timeout_ms=persistence.busy_timeout_ms,
             ),
+            graph_refresh=graph_refresh,
             credential_resolver=credential_resolver,
         )
         knowledge_tool_adapter = KnowledgeQueryToolAdapter(
@@ -1239,12 +1272,21 @@ def create_app(
             knowledge_repository.list_corpora,
             limit=daemon.event_page_limit,
         )
+        queries = await _thread_call(
+            knowledge_repository.list_queries,
+            limit=daemon.event_page_limit,
+        )
+        source_health = await _thread_call(
+            knowledge_repository.source_health,
+            limit=daemon.event_page_limit,
+        )
         projections = dict(current.projections)
         projections["knowledge"] = {
-            "sources": _knowledge_source_projection(config),
+            "sources": _knowledge_source_projection(config, source_health),
             "operations": [item.model_dump(mode="json") for item in operations],
             "corpora": [item.model_dump(mode="json") for item in corpora],
-            "degraded": any(item.state.value in {"degraded", "failed"} for item in corpora),
+            "degraded": any(item.state.value in {"degraded", "failed"} for item in corpora)
+            or any(item.state is KnowledgeQueryState.DEGRADED for item in queries),
         }
         return current.model_copy(update={"projections": projections})
 
@@ -1259,7 +1301,12 @@ def create_app(
         _principal: TokenRecord = authenticated,
     ) -> dict[str, object]:
         _require_knowledge(knowledge_repository, knowledge_service, knowledge_mutations)
-        return {"sources": _knowledge_source_projection(config)}
+        assert knowledge_repository is not None
+        source_health = await _thread_call(
+            knowledge_repository.source_health,
+            limit=daemon.event_page_limit,
+        )
+        return {"sources": _knowledge_source_projection(config, source_health)}
 
     @app.get("/v1/knowledge/queries/{query_id}", response_model=None)
     async def knowledge_query_get(
@@ -2289,7 +2336,10 @@ def _dispatch(
             result = knowledge_mutations.ingest(authorized.knowledge_ingest)
             return "knowledge.operation_settled", result.model_dump(mode="json")
         if command.command_type == "knowledge.refresh" and authorized.knowledge_refresh:
-            result = knowledge_mutations.refresh(authorized.knowledge_refresh)
+            result = knowledge_mutations.refresh(
+                authorized.knowledge_refresh,
+                policy_fingerprint=authorized.decision.policy_fingerprint,
+            )
             return "knowledge.operation_settled", result.model_dump(mode="json")
         if (
             command.command_type == "knowledge.memory.capture"

@@ -6,7 +6,8 @@ RUN apt-get update \
 
 WORKDIR /opt/mishkan
 COPY . .
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev \
+    && uv pip install --system "graphifyy==0.9.67"
 
 ENV PATH="/opt/mishkan/.venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \

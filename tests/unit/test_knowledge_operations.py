@@ -124,8 +124,14 @@ class GraphRefresh:
         self.lose_publish_response = lose_publish_response
         self.settlement = ProviderReconciliation(ProviderSettlement.UNKNOWN)
 
-    def build(self, request: KnowledgeRefreshRequest, corpus: KnowledgeCorpus) -> GraphRefreshBuild:
-        del corpus
+    def build(
+        self,
+        request: KnowledgeRefreshRequest,
+        corpus: KnowledgeCorpus,
+        *,
+        policy_fingerprint: str,
+    ) -> GraphRefreshBuild:
+        del corpus, policy_fingerprint
         return GraphRefreshBuild(
             graph=b"graph-v2",
             graph_diff=b'{"changed":1}',
@@ -149,6 +155,12 @@ class GraphRefresh:
     ) -> ProviderReconciliation:
         del operation, corpus
         return self.settlement
+
+    def recover(
+        self, operation: KnowledgeOperation, corpus: KnowledgeCorpus
+    ) -> GraphRefreshBuild | None:
+        del operation, corpus
+        return None
 
     def cancel(
         self, operation: KnowledgeOperation, corpus: KnowledgeCorpus
@@ -412,7 +424,7 @@ def test_graph_refresh_publishes_artifact_reference_then_current_corpus(tmp_path
         requested_by="Knowledge_Curator",
     )
 
-    completed = service.refresh(request)
+    completed = service.refresh(request, policy_fingerprint="a" * 64)
 
     assert completed.state is KnowledgeOperationState.SUCCEEDED
     assert len(completed.result_references) == 2
@@ -445,7 +457,7 @@ def test_graph_publish_uncertainty_preserves_evidence_and_reconciles(tmp_path: P
         requested_by="Knowledge_Curator",
     )
 
-    uncertain = service.refresh(request)
+    uncertain = service.refresh(request, policy_fingerprint="a" * 64)
     assert uncertain.state is KnowledgeOperationState.UNCERTAIN
     assert len(uncertain.result_references) == 2
     assert artifacts.read_bytes(uncertain.result_references[0]) == b"graph-v2"

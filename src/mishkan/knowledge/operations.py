@@ -215,8 +215,16 @@ class GraphRefreshPort(Protocol):
     """Governed Graphify refresh port; implementations must use the Effect Gateway."""
 
     def build(
-        self, request: KnowledgeRefreshRequest, corpus: KnowledgeCorpus
+        self,
+        request: KnowledgeRefreshRequest,
+        corpus: KnowledgeCorpus,
+        *,
+        policy_fingerprint: str,
     ) -> GraphRefreshBuild: ...
+
+    def recover(
+        self, operation: KnowledgeOperation, corpus: KnowledgeCorpus
+    ) -> GraphRefreshBuild | None: ...
 
     def publish(
         self,
@@ -483,7 +491,12 @@ class KnowledgeMutationService:
                 result_references=(proposal_artifact.reference,),
             )
 
-    def refresh(self, request: KnowledgeRefreshRequest) -> KnowledgeOperation:
+    def refresh(
+        self,
+        request: KnowledgeRefreshRequest,
+        *,
+        policy_fingerprint: str | None = None,
+    ) -> KnowledgeOperation:
         source, adapter, credentials, profile = self._prepare(
             kind=KnowledgeOperationKind.REFRESH,
             project_id=request.project_id,
@@ -530,7 +543,17 @@ class KnowledgeMutationService:
         result: ProviderMutationResult | None = None
         try:
             if source.knowledge_class is KnowledgeClass.STRUCTURAL:
-                return self._refresh_graph(request, operation, indexing)
+                if policy_fingerprint is None:
+                    raise MishkanError(
+                        ErrorCode.POLICY_CONFLICT,
+                        "Graphify refresh lacks authoritative policy evidence",
+                    )
+                return self._refresh_graph(
+                    request,
+                    operation,
+                    indexing,
+                    policy_fingerprint=policy_fingerprint,
+                )
             if source.knowledge_class is not KnowledgeClass.SEMANTIC:
                 raise MishkanError(
                     ErrorCode.TOOL_SCHEMA,
@@ -621,9 +644,19 @@ class KnowledgeMutationService:
         source, adapter, credentials, profile = self._source_runtime(operation.source_id)
         if source.knowledge_class is KnowledgeClass.STRUCTURAL and self._graph_refresh is not None:
             assert operation.corpus_id is not None
-            settlement = self._graph_refresh.reconcile(
-                operation, self._repository.corpus(operation.corpus_id)
-            )
+            corpus = self._repository.corpus(operation.corpus_id)
+            recovered = self._graph_refresh.recover(operation, corpus)
+            if recovered is not None:
+                refresh_request = KnowledgeRefreshRequest.model_validate_json(
+                    self._artifacts.read_bytes(operation.request_reference)
+                )
+                return self._complete_graph_refresh(
+                    refresh_request,
+                    operation,
+                    corpus,
+                    recovered,
+                )
+            settlement = self._graph_refresh.reconcile(operation, corpus)
         else:
             settlement = cast(ReconciliationAdapter, adapter).reconcile(
                 operation,
@@ -683,10 +716,27 @@ class KnowledgeMutationService:
         request: KnowledgeRefreshRequest,
         operation: KnowledgeOperation,
         corpus: KnowledgeCorpus,
+        *,
+        policy_fingerprint: str,
     ) -> KnowledgeOperation:
         if self._graph_refresh is None:
             raise MishkanError(ErrorCode.TOOL_UNAVAILABLE, "Graphify refresh port is unavailable")
-        build = self._graph_refresh.build(request, corpus)
+        build = self._graph_refresh.build(
+            request,
+            corpus,
+            policy_fingerprint=policy_fingerprint,
+        )
+        return self._complete_graph_refresh(request, operation, corpus, build)
+
+    def _complete_graph_refresh(
+        self,
+        request: KnowledgeRefreshRequest,
+        operation: KnowledgeOperation,
+        corpus: KnowledgeCorpus,
+        build: GraphRefreshBuild,
+    ) -> KnowledgeOperation:
+        if self._graph_refresh is None:
+            raise MishkanError(ErrorCode.TOOL_UNAVAILABLE, "Graphify refresh port is unavailable")
         graph = self._put_artifact(
             operation,
             build.graph,
@@ -703,23 +753,29 @@ class KnowledgeMutationService:
         try:
             scope = f"knowledge:{request.project_id}:{request.source_id}"
             current = self._artifacts.reference(scope, "current-graph")
-            self._artifacts.update_reference(
-                scope,
-                "current-graph",
-                graph.reference,
-                expected_revision=current.revision if current is not None else 0,
-            )
+            if current is None or current.artifact_reference != graph.reference:
+                self._artifacts.update_reference(
+                    scope,
+                    "current-graph",
+                    graph.reference,
+                    expected_revision=current.revision if current is not None else 0,
+                )
             self._graph_refresh.publish(request, corpus, graph.reference)
-            self._repository.put_corpus(
-                corpus.model_copy(
-                    update={
-                        "state": KnowledgeCorpusState.READY,
-                        "snapshot_reference": graph.reference,
-                        "indexed_revision": build.indexed_revision,
-                    }
-                ),
-                expected_revision=corpus.revision,
-            )
+            if not (
+                corpus.state is KnowledgeCorpusState.READY
+                and corpus.snapshot_reference == graph.reference
+                and corpus.indexed_revision == build.indexed_revision
+            ):
+                self._repository.put_corpus(
+                    corpus.model_copy(
+                        update={
+                            "state": KnowledgeCorpusState.READY,
+                            "snapshot_reference": graph.reference,
+                            "indexed_revision": build.indexed_revision,
+                        }
+                    ),
+                    expected_revision=corpus.revision,
+                )
             return self._repository.transition_operation(
                 operation.operation_id,
                 expected_revision=operation.revision,

@@ -111,6 +111,22 @@ sessions:
         max_file_bytes: 16777216
         max_total_bytes: 268435456
         exclude: [.git/**, .mishkan/**]
+    graphify-refresh:
+      cancellation_signals: [TERM, INT, KILL]
+      grace_seconds: 2.0
+      settle_timeout_seconds: 30.0
+      max_output_bytes: 67108864
+      max_input_bytes: 1048576
+      preview_bytes: 4096
+      read_chunk_bytes: 65536
+      readiness_poll_seconds: 0.1
+      max_memory_mb: 4096
+      max_cpu_seconds: 3600
+      effect_observation:
+        max_entries: 300000
+        max_file_bytes: 268435456
+        max_total_bytes: 3221225472
+        exclude: [.git/**, .mishkan/artifacts/**, .mishkan/sessions/**, .mishkan/mishkan.db*]
 web:
   network_profiles:
     public-read:
@@ -344,6 +360,15 @@ knowledge:
   capture_max_characters: 16384
   operation_poll_seconds: 0.25
   query_retention_days: 90
+  graph_refresh:
+    executable: /usr/local/bin/graphify
+    session_profile: graphify-refresh
+    publish_path: .mishkan/knowledge/published/graph.json
+    graph_relative_path: graphify-out/graph.json
+    no_cluster: true
+    max_repository_files: 250000
+    max_repository_bytes: 2147483648
+    max_diff_entries: 10000
 skills:
   managed_root: .mishkan/skills/active
   sources:

@@ -26,6 +26,7 @@ def test_local_knowledge_stack_is_loopback_authenticated_and_pinned() -> None:
     assert services["mem0"]["environment"]["AUTH_DISABLED"] == "false"
     assert services["cognee"]["environment"]["REQUIRE_AUTHENTICATION"] == "true"
     assert "--api-key" in services["graphify"]["command"]
+    assert "./.mishkan/knowledge/published:/graphs" in services["graphify"]["volumes"]
     assert services["mem0"]["environment"]["MEM0_TELEMETRY"] == "false"
     assert (
         services["mem0"]["environment"]["HISTORY_DB_PATH"] == "/opt/mem0/server/history/history.db"
@@ -46,6 +47,7 @@ def test_provider_builds_pin_contracts_and_prove_local_ollama_wiring() -> None:
     patch = (ROOT / "deploy/knowledge/mem0-ollama.patch").read_text(encoding="utf-8")
     cognee = (ROOT / "deploy/knowledge/cognee.Dockerfile").read_text(encoding="utf-8")
     graphify = (ROOT / "deploy/knowledge/graphify.Dockerfile").read_text(encoding="utf-8")
+    mishkan = (ROOT / "deploy/knowledge/mishkan.Dockerfile").read_text(encoding="utf-8")
 
     assert "MEM0_COMMIT=47a69e1e72dc562b6fdd49a9ef892229afc7508a" in mem0
     assert "mem0ai==2.2.0" in patch
@@ -53,6 +55,7 @@ def test_provider_builds_pin_contracts_and_prove_local_ollama_wiring() -> None:
     assert '"ollama"' in patch
     assert '"cognee[api,ollama]==1.6.1"' in cognee
     assert '"graphifyy[mcp]==0.9.67"' in graphify
+    assert '"graphifyy==0.9.67"' in mishkan
 
 
 def test_cognee_state_is_bound_to_explicit_persistent_roots() -> None:

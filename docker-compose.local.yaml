@@ -107,7 +107,7 @@ services:
     ports:
       - "127.0.0.1:7778:7778"
     volumes:
-      - graphify-data:/graphs
+      - ./.mishkan/knowledge/published:/graphs
     healthcheck:
       test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 7778), 2).close()"]
       interval: 10s
@@ -154,7 +154,6 @@ services:
 volumes:
   cognee-data:
   cognee-system:
-  graphify-data:
   mem0-history:
   mem0-postgres:
   ollama-data:

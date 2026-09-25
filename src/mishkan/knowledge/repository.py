@@ -243,6 +243,25 @@ class SQLiteKnowledgeRepository:
             ).all()
             return tuple(KnowledgeSourceAttempt.model_validate_json(row.payload) for row in rows)
 
+    def source_health(self, *, limit: int = 1_000) -> dict[str, KnowledgeSourceAttempt]:
+        """Return only the latest observed attempt per source; never probe providers."""
+
+        self._query_bounds(0, limit)
+        with Session(self._engine) as session:
+            rows = session.scalars(
+                select(KnowledgeSourceAttemptRow)
+                .order_by(
+                    KnowledgeSourceAttemptRow.recorded_at.desc(),
+                    KnowledgeSourceAttemptRow.id.desc(),
+                )
+                .limit(limit)
+            ).all()
+            latest: dict[str, KnowledgeSourceAttempt] = {}
+            for row in rows:
+                attempt = KnowledgeSourceAttempt.model_validate_json(row.payload)
+                latest.setdefault(attempt.source_id, attempt)
+            return latest
+
     def list_queries(
         self, *, project_id: str | None = None, offset: int = 0, limit: int = 100
     ) -> tuple[KnowledgeQueryRecord, ...]:

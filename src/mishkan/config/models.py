@@ -740,6 +740,33 @@ class KnowledgeSourceConfig(StrictConfigModel):
         return self
 
 
+class KnowledgeGraphRefreshConfig(StrictConfigModel):
+    """Public execution contract for the local Graphify refresh adapter."""
+
+    executable: Path
+    session_profile: str = Field(min_length=1, max_length=256)
+    publish_path: Path
+    graph_relative_path: Path
+    no_cluster: bool
+    max_repository_files: int = Field(ge=1, le=10_000_000)
+    max_repository_bytes: int = Field(ge=1, le=1_099_511_627_776)
+    max_diff_entries: int = Field(ge=1, le=1_000_000)
+
+    @field_validator("executable")
+    @classmethod
+    def executable_is_absolute(cls, value: Path) -> Path:
+        if not value.is_absolute():
+            raise ValueError("Graphify refresh executable must be absolute")
+        return value
+
+    @field_validator("publish_path", "graph_relative_path")
+    @classmethod
+    def paths_are_project_relative(cls, value: Path) -> Path:
+        if value.is_absolute() or not value.parts or ".." in value.parts:
+            raise ValueError("Graphify refresh paths must be project-relative")
+        return value
+
+
 class KnowledgeConfig(StrictConfigModel):
     staging_root: Path
     inspection_profile: str = Field(min_length=1, max_length=1_024)
@@ -750,6 +777,7 @@ class KnowledgeConfig(StrictConfigModel):
     capture_max_characters: int = Field(ge=1, le=1_048_576)
     operation_poll_seconds: float = Field(gt=0, le=60)
     query_retention_days: int = Field(ge=1, le=36_500)
+    graph_refresh: KnowledgeGraphRefreshConfig | None = None
 
     @field_validator("staging_root")
     @classmethod
@@ -781,6 +809,9 @@ class KnowledgeConfig(StrictConfigModel):
         literal = self.selection_order.get(KnowledgeClass.LITERAL, ())
         if not literal or not any(self.sources[item].enabled for item in literal):
             raise ValueError("knowledge configuration requires an enabled literal source")
+        structural = self.selection_order.get(KnowledgeClass.STRUCTURAL, ())
+        if any(self.sources[item].enabled for item in structural) and self.graph_refresh is None:
+            raise ValueError("enabled structural knowledge requires Graphify refresh configuration")
         return self
 
 

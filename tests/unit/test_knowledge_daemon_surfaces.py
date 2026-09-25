@@ -97,7 +97,11 @@ async def test_literal_query_is_idempotent_attributed_and_projected(tmp_path: Pa
     assert bundle["bundle_reference"].startswith("artifact:")
     assert record.json()["query"]["state"] == "completed"
     assert record.json()["attempts"][0]["source_id"] == "literal-native"
-    assert sources.json()["sources"][0]["health"] == "configured_unobserved"
+    literal_source = next(
+        item for item in sources.json()["sources"] if item["source_id"] == "literal-native"
+    )
+    assert literal_source["health"] == "succeeded"
+    assert literal_source["latency_ms"] >= 0
     assert "knowledge" in snapshot.json()["projections"]
 
 
@@ -125,6 +129,14 @@ async def test_optional_semantic_failure_degrades_to_literal_evidence(
             headers={"Authorization": f"Bearer {token.token}"},
             json=command.model_dump(mode="json"),
         )
+        sources = await client.get(
+            "/v1/knowledge/sources",
+            headers={"Authorization": f"Bearer {token.token}"},
+        )
+        snapshot = await client.get(
+            "/v1/snapshot",
+            headers={"Authorization": f"Bearer {token.token}"},
+        )
 
     assert response.status_code == 200
     assert response.json()["status"] == "accepted"
@@ -132,3 +144,6 @@ async def test_optional_semantic_failure_degrades_to_literal_evidence(
     assert bundle["degraded"] is True
     assert "cognee-local" in bundle["unavailable_sources"]
     assert any(item["source_id"] == "literal-native" for item in bundle["items"])
+    cognee = next(item for item in sources.json()["sources"] if item["source_id"] == "cognee-local")
+    assert cognee["health"] == "unavailable"
+    assert snapshot.json()["projections"]["knowledge"]["degraded"] is True
