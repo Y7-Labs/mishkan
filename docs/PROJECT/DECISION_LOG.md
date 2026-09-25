@@ -65,6 +65,7 @@ cannot be represented clearly in one row.
 | D-043 | Delivery | Accepted; I06 authorized | Begin I06 Organization, Missions, Communication, and Professional Evolution on `feat/i06-organization-missions-communication` | I05 is integrated into `develop` at `65e8d42` after its complete seven-job integration matrix passed, and promoted to `main` at `ef185b9`. I06 MUST implement the accepted 59-identity organization, contextual Mission Crews, joint PM/CTO Mission Brief governance, durable conversations, governed interventions, independent assurance/reporting, and evidence-based professional evolution without a universal workflow, static role/tool matrix, alternative agent runtime, or resolver-authored engineering outcome | Engineer instruction to proceed after I05 promotion; GitHub Actions run 34737305090, 2026-09-13 |
 | D-044 | Delivery | Accepted; I06 integrated gate closed and promoted | I06 Organization, Missions, Communication, and Professional Evolution has passed its complete acceptance gate at `2d1f78c`, is integrated into `develop` at `60e3ca7`, and is promoted to `main` at `e171540` | The final review closed durable concurrency, exact policy-projection, reachable-lifecycle, and README gaps. The local full gate passed with 80.26 percent branch coverage. Seven-job topic, `develop`, history-synchronization, and `main` CI matrices prove Python 3.11–3.13 on Linux/macOS plus the retained real environment-adapter gate. CrewAI remains the sole production coordination runtime; missions remain contextual and policy authority remains public and deterministic. I07 still requires explicit authorization | `VALIDATION/organization-missions.md`; GitHub Actions runs 34775116033, 34777116085, 34780295929, and 34780769315; engineer instruction to promote and validate I06, 2026-09-13 |
 | D-045 | Delivery | Accepted; I07 authorized | Begin I07 Attributed Knowledge and Degraded Operation on `feat/i07-attributed-knowledge` | I07 implements explicit literal, episodic, semantic, and structural knowledge classes; attributed immutable retrieval evidence; project-scoped ingestion; governed cross-project promotion; authenticated self-hosted mem0, Cognee, and Graphify adapters; and useful visible degradation. CrewAI remains the sole production coordination runtime, provider text remains untrusted evidence, and retrieval never hides mutation | Engineer-approved decision-complete I07 implementation plan and instruction to implement it, 2026-09-25 |
+| D-046 | Delivery | Accepted; I07 gate closed | I07 Attributed Knowledge and Degraded Operation has passed its complete gate at `9bafa68` and may be promoted topic-to-`develop` | The final deterministic suite passed 743 tests with 80.21 percent branch-aware coverage; authenticated live mem0, Cognee, and Graphify contracts and latency bounds passed without paid providers; all I07 knowledge modules meet at least 80 percent branch coverage; and the seven-job Linux/macOS Python 3.11–3.13 matrix passed schema, build, static, and retained real-environment checks. The gate closed Cognee contract, mem0 embedding-dimension, Graphify refresh, Context Pack evidence-body, negative-boundary coverage, and exported-schema gaps. CrewAI remains the sole production coordination runtime. I08 remains unauthorized pending explicit engineer direction after promotion | `VALIDATION/attributed-knowledge.md`; GitHub Actions run 36148793888; completed gate evidence, 2026-09-25 |
 
 ## Working-decision promotion matrix
 
@@ -104,7 +105,7 @@ left solely in that register; authority transferred through accepted decisions D
 
 ## Open decisions
 
-No documentary-baseline, I03, I04, I05, or I06 acceptance decision remains open. D-030 was superseded without
+No documentary-baseline, I03, I04, I05, I06, or I07 acceptance decision remains open. D-030 was superseded without
 acceptance; D-032 through D-037 were accepted in order on 2026-08-25, and D-038 accepts I03 from
 the complete local, live-model, and remote evidence recorded in `VALIDATION/durability.md`. D-039
 records I04's original acceptance. Its requested cross-baseline audit is implemented at `6a73e98`;
@@ -115,8 +116,9 @@ Plan 1.6 and authorizes I05 on its dedicated topic branch. D-042 accepts the com
 remote evidence recorded in `VALIDATION/skills-engineering.md`; I05 is closed and integrated through
 `develop` into `main`. D-043 authorized I06 on its dedicated topic branch; D-044 accepts its
 complete gate, green integration into `develop`, history-preserving synchronization, and green
-promotion to `main`. D-045 authorizes I07 on `feat/i07-attributed-knowledge`; its implementation
-and acceptance evidence remain open until D-046.
+promotion to `main`. D-045 authorized I07 on `feat/i07-attributed-knowledge`; D-046 accepts its
+complete local, authenticated live-provider, performance, and remote evidence. I07 is closed on its
+topic branch and may be promoted. I08 remains unauthorized until an explicit engineer decision.
 
 ## Review rules
 
