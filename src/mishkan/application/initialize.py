@@ -1,12 +1,13 @@
 """Repository initialization application service."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 
 from mishkan.artifacts import ArtifactStore, FilesystemArtifactStore
 from mishkan.artifacts.service import DurableArtifactService
-from mishkan.config.models import MishkanConfig
+from mishkan.config.models import CredentialReference, MishkanConfig
+from mishkan.crewai.credentials import CredentialPoolResolver
 from mishkan.crewai.environment import configure_crewai_environment
 from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.organization import load_initialization_definitions
@@ -15,13 +16,12 @@ from mishkan.planning import PlanValidator
 from mishkan.planning.models import InitializationReport
 from mishkan.policy import PolicyAuthority, PolicyLoader
 from mishkan.repository import RepositoryInspector
-from mishkan.tools.adapters import ContainerCommandAdapter
+from mishkan.tools.adapters import CapabilityAdapter, ContainerCommandAdapter
 from mishkan.tools.capability_runtime import CapabilityRuntime, build_capability_runtime
 from mishkan.tools.catalog import ToolCatalog
 from mishkan.tools.gateway import (
     CapabilityGateway,
     GitRepositoryStateObserver,
-    MappingCredentialResolver,
 )
 from mishkan.tools.inspection import ContentInspector, InspectionProfileLoader
 from mishkan.tools.isolation import IsolationProfileLoader, observe_container_commands
@@ -33,6 +33,38 @@ from mishkan.tools.native import (
 )
 
 
+class _ConfiguredCredentialResolver:
+    """Resolve only configured locators, at the moment the Gateway dispatches."""
+
+    def __init__(self, references: Mapping[str, CredentialReference]) -> None:
+        self._references = dict(references)
+        self._resolver = CredentialPoolResolver()
+
+    def resolve(self, locators: tuple[str, ...]) -> dict[str, str]:
+        try:
+            references = tuple(self._references[item] for item in locators)
+        except KeyError as exc:
+            raise MishkanError(
+                ErrorCode.AUTHORIZATION_MISSING,
+                "capability credential locator is not configured",
+            ) from exc
+        return self._resolver.resolve_exact(references)
+
+
+def _configured_credential_resolver(config: MishkanConfig) -> _ConfiguredCredentialResolver:
+    references = dict(config.credential_bindings)
+    if config.web is not None:
+        for web_source in config.web.sources.values():
+            references.update({item.locator: item for item in web_source.credential_refs})
+    if config.knowledge is not None:
+        for knowledge_source in config.knowledge.sources.values():
+            references.update({item.locator: item for item in knowledge_source.credential_refs})
+    if config.mcp is not None:
+        for connection in config.mcp.connections.values():
+            references.update({item.locator: item for item in connection.credential_refs})
+    return _ConfiguredCredentialResolver(references)
+
+
 class MishkanInitializer:
     def run(
         self,
@@ -41,6 +73,7 @@ class MishkanInitializer:
         objective: str,
         *,
         on_run_started: Callable[[str], None] | None = None,
+        capability_adapters: Mapping[str, CapabilityAdapter] | None = None,
     ) -> InitializationReport:
         if config.schema_version not in {"1.1", "1.2", "1.3", "1.4", "1.5", "1.6"}:
             raise MishkanError(
@@ -122,6 +155,7 @@ class MishkanInitializer:
                 inspector,
                 policy,
             )
+            runtime.adapters.update(capability_adapters or {})
             artifact_store = durable_artifacts
             available_environment = replace(
                 native_environment,
@@ -137,7 +171,13 @@ class MishkanInitializer:
         )
         authority = PolicyAuthority()
         contracts = available_contracts(catalog, outcome.allowed_tools)
-        adapters = dict(build_native_adapters(catalog, outcome.allowed_tools, native_environment))
+        runtime_adapter_ids = runtime.adapter_ids if runtime is not None else frozenset()
+        native_tool_ids = tuple(
+            contract.tool_id
+            for contract in contracts
+            if contract.adapter not in runtime_adapter_ids
+        )
+        adapters = dict(build_native_adapters(catalog, native_tool_ids, native_environment))
         if any(contract.adapter == ContainerCommandAdapter.adapter_id for contract in contracts):
             adapters[ContainerCommandAdapter.adapter_id] = ContainerCommandAdapter(
                 isolated_commands
@@ -160,7 +200,7 @@ class MishkanInitializer:
         gateway = CapabilityGateway(
             discovery.binding.root,
             authority,
-            MappingCredentialResolver({}),
+            _configured_credential_resolver(config),
             inspector,
             adapters,
             state_repository,

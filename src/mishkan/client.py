@@ -82,6 +82,19 @@ from mishkan.events import (
     EventHold as EventEvidenceHold,
 )
 from mishkan.execution import CursorRead, ExecutionSession
+from mishkan.knowledge import (
+    KnowledgeBundle,
+    KnowledgeCorpus,
+    KnowledgeIngestRequest,
+    KnowledgeMemoryCaptureRequest,
+    KnowledgeOperation,
+    KnowledgeOperationReconcileRequest,
+    KnowledgePromotion,
+    KnowledgePromotionDecision,
+    KnowledgeQuery,
+    KnowledgeQueryRecord,
+    KnowledgeRefreshRequest,
+)
 from mishkan.missions import (
     MissionBrief,
     MissionCompletionReadiness,
@@ -157,6 +170,18 @@ class Mishkan:
     @property
     def principal_id(self) -> str:
         return self._token_file.read().principal_id
+
+    @property
+    def knowledge(self) -> KnowledgeClient:
+        return KnowledgeClient(self)
+
+    @property
+    def memory(self) -> MemoryClient:
+        return MemoryClient(self)
+
+    @property
+    def structure(self) -> StructureClient:
+        return StructureClient(self)
 
     def command(self, command: ApplicationCommand) -> CommandResult:
         response = self._client.post(
@@ -1662,6 +1687,198 @@ class Mishkan:
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._token_file.read().token}"}
+
+
+class KnowledgeClient:
+    """Thin attributed-knowledge client; all authority remains in mishkand."""
+
+    def __init__(self, client: Mishkan) -> None:
+        self._client = client
+
+    def query(self, query: KnowledgeQuery) -> KnowledgeBundle:
+        result = self._client.command(
+            ApplicationCommand(
+                command_type="knowledge.query",
+                actor_id=self._client.principal_id,
+                target_type="knowledge_query",
+                target_id=str(query.query_id),
+                payload={"query": query.model_dump(mode="json")},
+            )
+        )
+        return KnowledgeBundle.model_validate(result.payload)
+
+    def sources(self) -> tuple[dict[str, object], ...]:
+        response = self._client._client.get(
+            "/v1/knowledge/sources", headers=self._client._headers()
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return tuple(dict(item) for item in payload["sources"])
+
+    def query_record(
+        self, query_id: UUID
+    ) -> tuple[KnowledgeQueryRecord, tuple[dict[str, object], ...]]:
+        response = self._client._client.get(
+            f"/v1/knowledge/queries/{query_id}", headers=self._client._headers()
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return (
+            KnowledgeQueryRecord.model_validate(payload["query"]),
+            tuple(dict(item) for item in payload["attempts"]),
+        )
+
+    def ingest(self, request: KnowledgeIngestRequest) -> KnowledgeOperation:
+        return self._operation("knowledge.ingest", request.operation_id, request)
+
+    def refresh(self, request: KnowledgeRefreshRequest) -> KnowledgeOperation:
+        return self._operation("knowledge.refresh", request.operation_id, request)
+
+    def cancel(self, operation_id: UUID) -> KnowledgeOperation:
+        result = self._client.command(
+            ApplicationCommand(
+                command_type="knowledge.operation.cancel",
+                actor_id=self._client.principal_id,
+                target_type="knowledge_operation",
+                target_id=str(operation_id),
+                payload={},
+            )
+        )
+        return KnowledgeOperation.model_validate(result.payload)
+
+    def reconcile(self, request: KnowledgeOperationReconcileRequest) -> KnowledgeOperation:
+        return self._operation("knowledge.operation.reconcile", request.operation_id, request)
+
+    def operations(
+        self, *, project_id: str | None = None, offset: int = 0, limit: int = 100
+    ) -> tuple[KnowledgeOperation, ...]:
+        params: dict[str, str | int] = {"offset": offset, "limit": limit}
+        if project_id is not None:
+            params["project_id"] = project_id
+        response = self._client._client.get(
+            "/v1/knowledge/operations",
+            headers=self._client._headers(),
+            params=params,
+        )
+        response.raise_for_status()
+        return tuple(KnowledgeOperation.model_validate(item) for item in response.json())
+
+    def operation(self, operation_id: UUID) -> KnowledgeOperation:
+        response = self._client._client.get(
+            f"/v1/knowledge/operations/{operation_id}", headers=self._client._headers()
+        )
+        response.raise_for_status()
+        return KnowledgeOperation.model_validate(response.json())
+
+    def corpora(
+        self, *, project_id: str | None = None, offset: int = 0, limit: int = 100
+    ) -> tuple[KnowledgeCorpus, ...]:
+        params: dict[str, str | int] = {"offset": offset, "limit": limit}
+        if project_id is not None:
+            params["project_id"] = project_id
+        response = self._client._client.get(
+            "/v1/knowledge/corpora", headers=self._client._headers(), params=params
+        )
+        response.raise_for_status()
+        return tuple(KnowledgeCorpus.model_validate(item) for item in response.json())
+
+    def propose(self, proposal: KnowledgePromotion) -> KnowledgePromotion:
+        result = self._client.command(
+            ApplicationCommand(
+                command_type="knowledge.promotion.propose",
+                actor_id=self._client.principal_id,
+                target_type="knowledge_promotion",
+                target_id=str(proposal.promotion_id),
+                payload={"proposal": proposal.model_dump(mode="json")},
+            )
+        )
+        return KnowledgePromotion.model_validate(result.payload)
+
+    def decide(self, decision: KnowledgePromotionDecision) -> KnowledgePromotion:
+        result = self._client.command(
+            ApplicationCommand(
+                command_type="knowledge.promotion.decide",
+                actor_id=self._client.principal_id,
+                target_type="knowledge_promotion",
+                target_id=str(decision.promotion_id),
+                payload={"decision": decision.model_dump(mode="json")},
+            )
+        )
+        return KnowledgePromotion.model_validate(result.payload)
+
+    def promotions(
+        self, *, project_id: str | None = None, offset: int = 0, limit: int = 100
+    ) -> tuple[KnowledgePromotion, ...]:
+        params: dict[str, str | int] = {"offset": offset, "limit": limit}
+        if project_id is not None:
+            params["project_id"] = project_id
+        response = self._client._client.get(
+            "/v1/knowledge/promotions", headers=self._client._headers(), params=params
+        )
+        response.raise_for_status()
+        return tuple(KnowledgePromotion.model_validate(item) for item in response.json())
+
+    def _operation(
+        self,
+        command_type: str,
+        operation_id: UUID,
+        request: KnowledgeIngestRequest
+        | KnowledgeRefreshRequest
+        | KnowledgeOperationReconcileRequest,
+    ) -> KnowledgeOperation:
+        result = self._client.command(
+            ApplicationCommand(
+                command_type=command_type,
+                actor_id=self._client.principal_id,
+                target_type="knowledge_operation",
+                target_id=str(operation_id),
+                payload={"request": request.model_dump(mode="json")},
+            )
+        )
+        return KnowledgeOperation.model_validate(result.payload)
+
+
+class MemoryClient:
+    """Episodic-memory view over the same daemon knowledge authority."""
+
+    def __init__(self, client: Mishkan) -> None:
+        self._client = client
+
+    def recall(self, query: KnowledgeQuery) -> KnowledgeBundle:
+        return self._client.knowledge.query(query)
+
+    def capture(self, request: KnowledgeMemoryCaptureRequest) -> KnowledgeOperation:
+        result = self._client.command(
+            ApplicationCommand(
+                command_type="knowledge.memory.capture",
+                actor_id=self._client.principal_id,
+                target_type="knowledge_operation",
+                target_id=str(request.operation_id),
+                payload={"request": request.model_dump(mode="json")},
+            )
+        )
+        return KnowledgeOperation.model_validate(result.payload)
+
+    def list(
+        self, *, project_id: str | None = None, offset: int = 0, limit: int = 100
+    ) -> tuple[KnowledgeOperation, ...]:
+        return self._client.knowledge.operations(project_id=project_id, offset=offset, limit=limit)
+
+
+class StructureClient:
+    """Structural-evidence view over governed knowledge queries and refreshes."""
+
+    def __init__(self, client: Mishkan) -> None:
+        self._client = client
+
+    def query(self, query: KnowledgeQuery) -> KnowledgeBundle:
+        return self._client.knowledge.query(query)
+
+    def refresh(self, request: KnowledgeRefreshRequest) -> KnowledgeOperation:
+        return self._client.knowledge.refresh(request)
+
+    def status(self, *, project_id: str | None = None) -> tuple[KnowledgeCorpus, ...]:
+        return self._client.knowledge.corpora(project_id=project_id)
 
 
 def daemon_url(host: str, port: int) -> str:

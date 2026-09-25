@@ -117,6 +117,9 @@ async def test_official_sdk_uses_authenticated_stateless_daemon_facade(tmp_path:
         "conversation.get",
         "advisory.candidates.list",
         "notification.list",
+        "knowledge.query",
+        "knowledge.sources.list",
+        "knowledge.operations.list",
         "command.submit",
     ]
     assert {str(item.uri) for item in resources.resources} == {
@@ -128,6 +131,8 @@ async def test_official_sdk_uses_authenticated_stateless_daemon_facade(tmp_path:
         "mishkan://conversations",
         "mishkan://advisory/candidates",
         "mishkan://notifications",
+        "mishkan://knowledge/sources",
+        "mishkan://knowledge/operations",
     }
     assert health.isError is False
     assert health.structuredContent == {

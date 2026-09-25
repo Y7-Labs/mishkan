@@ -505,6 +505,9 @@ SUPPORTED_MCP_FACADE_OPERATIONS = frozenset(
         "conversation.get",
         "advisory.candidates.list",
         "notification.list",
+        "knowledge.query",
+        "knowledge.sources.list",
+        "knowledge.operations.list",
         "command.submit",
     }
 )
@@ -518,6 +521,8 @@ SUPPORTED_MCP_FACADE_RESOURCES = frozenset(
         "mishkan://conversations",
         "mishkan://advisory/candidates",
         "mishkan://notifications",
+        "mishkan://knowledge/sources",
+        "mishkan://knowledge/operations",
     }
 )
 

@@ -43,6 +43,9 @@ mission_app = typer.Typer(help="Create, inspect, plan, and govern contextual mis
 conversation_app = typer.Typer(help="Use durable Executive, Mission, Branch, and Direct channels.")
 intervention_app = typer.Typer(help="Inspect escalations and apply governed mission interventions.")
 advisory_app = typer.Typer(help="Inspect evidence-based contextual recommendations.")
+knowledge_app = typer.Typer(help="Query and govern attributed knowledge through mishkand.")
+memory_app = typer.Typer(help="Recall and capture accepted episodic memory through mishkand.")
+code_graph_app = typer.Typer(help="Query and refresh structural repository evidence.")
 app.add_typer(config_app, name="config")
 app.add_typer(schema_app, name="schema")
 app.add_typer(daemon_app, name="daemon")
@@ -65,6 +68,9 @@ app.add_typer(mission_app, name="mission")
 app.add_typer(conversation_app, name="conversation")
 app.add_typer(intervention_app, name="intervention")
 app.add_typer(advisory_app, name="advisory")
+app.add_typer(knowledge_app, name="knowledge")
+app.add_typer(memory_app, name="memory")
+app.add_typer(code_graph_app, name="code-graph")
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -78,6 +84,205 @@ def _read_contract(path: Path, model: type[ModelT], option: str) -> ModelT:
 
 def _dump_models(values: tuple[BaseModel, ...]) -> list[dict[str, Any]]:
     return [value.model_dump(mode="json") for value in values]
+
+
+@knowledge_app.command("query")
+def query_knowledge(
+    ctx: typer.Context,
+    request_file: Annotated[Path, typer.Option("--request")],
+) -> None:
+    """Submit one explicit-class, bounded attributed knowledge query."""
+    from mishkan.knowledge import KnowledgeQuery
+
+    request = _read_contract(request_file, KnowledgeQuery, "--request")
+    with _daemon_client(ctx) as client:
+        result = client.knowledge.query(request)
+    _emit(result.model_dump(mode="json"), as_json=_state(ctx).json_output)
+
+
+@knowledge_app.command("sources")
+def list_knowledge_sources(ctx: typer.Context) -> None:
+    """List configured sources without probing or mutating them."""
+    with _daemon_client(ctx) as client:
+        sources = client.knowledge.sources()
+    _emit(list(sources), as_json=_state(ctx).json_output)
+
+
+@knowledge_app.command("ingest")
+def ingest_knowledge(
+    ctx: typer.Context,
+    request_file: Annotated[Path, typer.Option("--request")],
+) -> None:
+    """Explicitly ingest an immutable artifact into a semantic corpus."""
+    from mishkan.knowledge import KnowledgeIngestRequest
+
+    request = _read_contract(request_file, KnowledgeIngestRequest, "--request")
+    with _daemon_client(ctx) as client:
+        result = client.knowledge.ingest(request)
+    _emit(result.model_dump(mode="json"), as_json=_state(ctx).json_output)
+
+
+@knowledge_app.command("refresh")
+def refresh_knowledge(
+    ctx: typer.Context,
+    request_file: Annotated[Path, typer.Option("--request")],
+) -> None:
+    """Explicitly refresh a compatible semantic or structural corpus."""
+    from mishkan.knowledge import KnowledgeRefreshRequest
+
+    request = _read_contract(request_file, KnowledgeRefreshRequest, "--request")
+    with _daemon_client(ctx) as client:
+        result = client.knowledge.refresh(request)
+    _emit(result.model_dump(mode="json"), as_json=_state(ctx).json_output)
+
+
+@knowledge_app.command("operations")
+def list_knowledge_operations(
+    ctx: typer.Context,
+    project_id: Annotated[str | None, typer.Option("--project")] = None,
+    offset: Annotated[int, typer.Option(min=0)] = 0,
+    limit: Annotated[int, typer.Option(min=1, max=1_000)] = 100,
+) -> None:
+    """List durable provider operations and visible uncertain settlements."""
+    with _daemon_client(ctx) as client:
+        records = client.knowledge.operations(project_id=project_id, offset=offset, limit=limit)
+    _emit(_dump_models(records), as_json=_state(ctx).json_output)
+
+
+@knowledge_app.command("promote")
+def propose_knowledge_promotion(
+    ctx: typer.Context,
+    proposal_file: Annotated[Path, typer.Option("--proposal")],
+) -> None:
+    """Propose a separately governed change in knowledge scope."""
+    from mishkan.knowledge import KnowledgePromotion
+
+    proposal = _read_contract(proposal_file, KnowledgePromotion, "--proposal")
+    with _daemon_client(ctx) as client:
+        result = client.knowledge.propose(proposal)
+    _emit(result.model_dump(mode="json"), as_json=_state(ctx).json_output)
+
+
+@knowledge_app.command("decide")
+def decide_knowledge_promotion(
+    ctx: typer.Context,
+    decision_file: Annotated[Path, typer.Option("--decision")],
+) -> None:
+    """Approve, reject, or revoke a promotion under the current public policy."""
+    from mishkan.knowledge import KnowledgePromotionDecision
+
+    decision = _read_contract(decision_file, KnowledgePromotionDecision, "--decision")
+    with _daemon_client(ctx) as client:
+        result = client.knowledge.decide(decision)
+    _emit(result.model_dump(mode="json"), as_json=_state(ctx).json_output)
+
+
+@memory_app.command("recall")
+def recall_memory(
+    ctx: typer.Context,
+    request_file: Annotated[Path, typer.Option("--request")],
+) -> None:
+    """Recall episodic evidence using an explicit episodic KnowledgeQuery."""
+    from mishkan.knowledge import KnowledgeClass, KnowledgeQuery
+
+    request = _read_contract(request_file, KnowledgeQuery, "--request")
+    if request.knowledge_class is not KnowledgeClass.EPISODIC:
+        raise typer.BadParameter("--request must declare knowledge_class=episodic")
+    with _daemon_client(ctx) as client:
+        result = client.memory.recall(request)
+    _emit(result.model_dump(mode="json"), as_json=_state(ctx).json_output)
+
+
+@memory_app.command("capture")
+def capture_memory(
+    ctx: typer.Context,
+    request_file: Annotated[Path, typer.Option("--request")],
+) -> None:
+    """Capture a concise proposal only from a durably accepted result."""
+    from mishkan.knowledge import KnowledgeMemoryCaptureRequest
+
+    request = _read_contract(request_file, KnowledgeMemoryCaptureRequest, "--request")
+    with _daemon_client(ctx) as client:
+        result = client.memory.capture(request)
+    _emit(result.model_dump(mode="json"), as_json=_state(ctx).json_output)
+
+
+@memory_app.command("list")
+def list_memory_operations(
+    ctx: typer.Context,
+    project_id: Annotated[str | None, typer.Option("--project")] = None,
+    offset: Annotated[int, typer.Option(min=0)] = 0,
+    limit: Annotated[int, typer.Option(min=1, max=1_000)] = 100,
+) -> None:
+    """List durable memory operations; provider storage is never queried directly."""
+    with _daemon_client(ctx) as client:
+        records = client.memory.list(project_id=project_id, offset=offset, limit=limit)
+    _emit(_dump_models(records), as_json=_state(ctx).json_output)
+
+
+def _code_graph_query(ctx: typer.Context, request_file: Path, operation: str) -> None:
+    from mishkan.knowledge import (
+        KnowledgeClass,
+        KnowledgeQuery,
+        KnowledgeStructureOperation,
+    )
+
+    request = _read_contract(request_file, KnowledgeQuery, "--request")
+    if request.knowledge_class is not KnowledgeClass.STRUCTURAL:
+        raise typer.BadParameter("--request must declare knowledge_class=structural")
+    request = request.model_copy(
+        update={"structure_operation": KnowledgeStructureOperation(operation)}
+    )
+    with _daemon_client(ctx) as client:
+        result = client.structure.query(request)
+    _emit(result.model_dump(mode="json"), as_json=_state(ctx).json_output)
+
+
+def _register_code_graph_command(command_name: str, operation: str) -> None:
+    def command(
+        ctx: typer.Context,
+        request_file: Annotated[Path, typer.Option("--request")],
+    ) -> None:
+        _code_graph_query(ctx, request_file, operation)
+
+    command.__name__ = f"code_graph_{command_name.replace('-', '_')}"
+    command.__doc__ = f"Run the typed Graphify {operation} operation through MISHKAN."
+    code_graph_app.command(command_name)(command)
+
+
+for _command_name, _operation in (
+    ("query", "query_graph"),
+    ("node", "get_node"),
+    ("neighbors", "get_neighbors"),
+    ("path", "shortest_path"),
+    ("stats", "graph_stats"),
+):
+    _register_code_graph_command(_command_name, _operation)
+
+
+@code_graph_app.command("refresh")
+def refresh_code_graph(
+    ctx: typer.Context,
+    request_file: Annotated[Path, typer.Option("--request")],
+) -> None:
+    """Run an explicit, durable Graphify refresh operation."""
+    refresh_knowledge(ctx, request_file)
+
+
+@code_graph_app.command("status")
+def code_graph_status(
+    ctx: typer.Context,
+    project_id: Annotated[str | None, typer.Option("--project")] = None,
+) -> None:
+    """Show structural corpus state without probing Graphify implicitly."""
+    with _daemon_client(ctx) as client:
+        records = client.structure.status(project_id=project_id)
+    structural = [
+        item.model_dump(mode="json")
+        for item in records
+        if item.knowledge_class.value == "structural"
+    ]
+    _emit(structural, as_json=_state(ctx).json_output)
 
 
 @org_app.command("show")

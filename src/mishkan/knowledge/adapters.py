@@ -580,12 +580,15 @@ class GraphifyMcpAdapter:
 
     @staticmethod
     def _request(query: KnowledgeQuery) -> tuple[str, dict[str, Any]]:
-        return (
-            "query_graph",
-            {
-                "query": query.question,
-                "max_results": query.max_results,
-                "repository_id": query.scope.repository_id,
-                "repository_revision": query.scope.repository_revision,
-            },
+        primitive = (
+            query.structure_operation.value
+            if query.structure_operation is not None
+            else "query_graph"
         )
+        arguments = dict(query.structure_arguments)
+        if primitive == "query_graph":
+            arguments.setdefault("query", query.question)
+            arguments.setdefault("max_results", query.max_results)
+            arguments.setdefault("repository_id", query.scope.repository_id)
+            arguments.setdefault("repository_revision", query.scope.repository_revision)
+        return primitive, arguments

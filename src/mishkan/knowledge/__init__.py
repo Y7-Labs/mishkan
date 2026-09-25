@@ -24,6 +24,7 @@ from mishkan.knowledge.models import (
     KnowledgeScope,
     KnowledgeSourceAttempt,
     KnowledgeStaleness,
+    KnowledgeStructureOperation,
 )
 
 __all__ = [
@@ -50,4 +51,5 @@ __all__ = [
     "KnowledgeScope",
     "KnowledgeSourceAttempt",
     "KnowledgeStaleness",
+    "KnowledgeStructureOperation",
 ]

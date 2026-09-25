@@ -134,6 +134,7 @@ def test_bundled_catalogue_lists_metadata_but_binds_only_available_adapters(
     )
 
     assert tuple(tool.tool_id for tool in catalog.list_metadata()) == (
+        "knowledge.query",
         "file.resolve",
         "file.stat",
         "file.read",

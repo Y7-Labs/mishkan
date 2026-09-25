@@ -11,6 +11,7 @@ roles:
     backstory: You are a non-mutating investigator who never invents evidence, tools, or commands.
     model_route: execution
     allowed_tools:
+      - knowledge.query
       - repository.read_file
       - file.resolve
       - file.stat
@@ -28,6 +29,7 @@ roles:
     backstory: You review another role's work and reject unsupported or uncited claims.
     model_route: execution
     allowed_tools:
+      - knowledge.query
       - repository.read_file
       - file.resolve
       - file.stat

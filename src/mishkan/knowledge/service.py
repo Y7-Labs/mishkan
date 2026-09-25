@@ -194,6 +194,8 @@ class KnowledgeService:
                         ErrorCode.OPTIONAL_DEPENDENCY,
                         ErrorCode.REQUIRED_DEPENDENCY,
                         ErrorCode.TOOL_UNAVAILABLE,
+                        ErrorCode.AUTHORIZATION_MISSING,
+                        ErrorCode.CONFIGURATION,
                     }
                     else KnowledgeAttemptState.FAILED
                 )

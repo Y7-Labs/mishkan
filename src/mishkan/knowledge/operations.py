@@ -490,6 +490,11 @@ class KnowledgeMutationService:
             source_id=request.source_id,
             actor=request.requested_by,
         )
+        if source.knowledge_class is KnowledgeClass.STRUCTURAL and self._graph_refresh is None:
+            raise MishkanError(
+                ErrorCode.TOOL_UNAVAILABLE,
+                "Graphify refresh port is unavailable",
+            )
         corpus = self._require_corpus(request.corpus_id, request.project_id, request.source_id)
         if (
             request.repository_id is not None
@@ -642,7 +647,12 @@ class KnowledgeMutationService:
         )
         return self._repository.propose_promotion(proposal)
 
-    def decide_promotion(self, decision: KnowledgePromotionDecision) -> KnowledgePromotion:
+    def decide_promotion(
+        self,
+        decision: KnowledgePromotionDecision,
+        *,
+        policy_fingerprint: str | None = None,
+    ) -> KnowledgePromotion:
         proposal = self._repository.promotion(decision.promotion_id)
         if decision.decided_by not in self._config.promotion_approver_identities:
             raise MishkanError(ErrorCode.AUTHORITY_NOT_GRANTED, "identity cannot decide promotion")
@@ -654,12 +664,18 @@ class KnowledgeMutationService:
             source_id="promotion",
             actor_identity=decision.decided_by,
         )
+        effective_fingerprint = policy_fingerprint or decision.policy_fingerprint
+        if effective_fingerprint is None:
+            raise MishkanError(
+                ErrorCode.POLICY_CONFLICT,
+                "knowledge promotion decision lacks authoritative policy evidence",
+            )
         return self._repository.decide_promotion(
             decision.promotion_id,
             expected_revision=decision.expected_revision,
             disposition=decision.disposition,
             decided_by=decision.decided_by,
-            policy_fingerprint=decision.policy_fingerprint,
+            policy_fingerprint=effective_fingerprint,
         )
 
     def _refresh_graph(

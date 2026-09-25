@@ -30,6 +30,20 @@ class KnowledgeClass(StrEnum):
     STRUCTURAL = "structural"
 
 
+class KnowledgeStructureOperation(StrEnum):
+    QUERY = "query_graph"
+    NODE = "get_node"
+    NEIGHBORS = "get_neighbors"
+    PATH = "shortest_path"
+    STATISTICS = "graph_stats"
+    CALLERS = "graphify_callers"
+    CALLEES = "graphify_callees"
+    TRACE = "graphify_trace"
+    IMPACT = "graphify_impact"
+    RANK_FILES = "graphify_rank_files"
+    GOD_NODES = "god_nodes"
+
+
 class KnowledgeQueryState(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
@@ -114,6 +128,8 @@ class KnowledgeQuery(KnowledgeModel):
     scope: KnowledgeScope
     required: bool = False
     preferred_sources: tuple[str, ...] = ()
+    structure_operation: KnowledgeStructureOperation | None = None
+    structure_arguments: dict[str, object] = Field(default_factory=dict)
     max_results: int = Field(default=10, ge=1, le=1_000)
     max_bytes: int = Field(default=262_144, ge=1, le=67_108_864)
     deadline_seconds: float = Field(default=30.0, gt=0, le=3_600)
@@ -132,6 +148,10 @@ class KnowledgeQuery(KnowledgeModel):
             raise ValueError("literal and structural queries require a repository revision")
         if len(self.preferred_sources) != len(set(self.preferred_sources)):
             raise ValueError("preferred knowledge sources must be unique")
+        if self.knowledge_class is not KnowledgeClass.STRUCTURAL and (
+            self.structure_operation is not None or self.structure_arguments
+        ):
+            raise ValueError("structure operation is valid only for structural knowledge")
         return self
 
     @property
@@ -439,7 +459,7 @@ class KnowledgePromotionDecision(KnowledgeModel):
     expected_revision: int = Field(ge=1)
     disposition: KnowledgePromotionDisposition
     decided_by: str = Field(min_length=1, max_length=256)
-    policy_fingerprint: str = Field(pattern=_DIGEST_PATTERN)
+    policy_fingerprint: str | None = Field(default=None, pattern=_DIGEST_PATTERN)
 
     @field_validator("disposition")
     @classmethod

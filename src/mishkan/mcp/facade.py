@@ -8,11 +8,13 @@ from typing import Any, Protocol, TypeVar
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from mishkan.application import ApplicationCommand, CommandResult
-from mishkan.config.models import SUPPORTED_MCP_FACADE_OPERATIONS, McpConfig
+from mishkan.config.models import SUPPORTED_MCP_FACADE_OPERATIONS, KnowledgeConfig, McpConfig
 from mishkan.context import ContextualRecommendationService
 from mishkan.conversations import SQLiteConversationRepository
 from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.events import EventPage
+from mishkan.knowledge import KnowledgeQuery
+from mishkan.knowledge.repository import SQLiteKnowledgeRepository
 from mishkan.missions import (
     MissionEnvironmentReadinessService,
     MissionTaskClaimService,
@@ -113,6 +115,12 @@ class NotificationQuery(FacadeModel):
     deliveries: tuple[NotificationDelivery, ...] = ()
 
 
+class KnowledgeListQuery(FacadeModel):
+    project_id: str | None = Field(default=None, min_length=1, max_length=256)
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=100, ge=1, le=1_000)
+
+
 class McpFacadeRouter:
     """Expose only allowlisted operations that have an executable daemon handler."""
 
@@ -136,6 +144,8 @@ class McpFacadeRouter:
         mission_task_claims: MissionTaskClaimService | None = None,
         mission_inspections: MissionInspectionService | None = None,
         notifications: NotificationService | None = None,
+        knowledge_config: KnowledgeConfig | None = None,
+        knowledge: SQLiteKnowledgeRepository | None = None,
     ) -> None:
         profile = config.exposure_profiles[config.facade.exposure_profile]
         self.operations = profile.operations
@@ -154,6 +164,8 @@ class McpFacadeRouter:
         self._mission_task_claims = mission_task_claims
         self._mission_inspections = mission_inspections
         self._notifications = notifications
+        self._knowledge_config = knowledge_config
+        self._knowledge = knowledge
 
     async def invoke(
         self,
@@ -334,6 +346,51 @@ class McpFacadeRouter:
                 severities=frozenset(query.severities),
                 deliveries=frozenset(query.deliveries),
             ).model_dump(mode="json")
+        if operation == "knowledge.sources.list":
+            self._require_empty(arguments)
+            knowledge_config = self._require_dependency(self._knowledge_config, "knowledge")
+            selection = {
+                source_id: index
+                for source_ids in knowledge_config.selection_order.values()
+                for index, source_id in enumerate(source_ids)
+            }
+            return {
+                "sources": [
+                    {
+                        "source_id": source_id,
+                        "knowledge_class": source.knowledge_class.value,
+                        "adapter": source.adapter,
+                        "enabled": source.enabled,
+                        "cost_class": source.cost_class.value,
+                        "selection_index": selection.get(source_id, -1),
+                        "health": "configured_unobserved",
+                    }
+                    for source_id, source in sorted(knowledge_config.sources.items())
+                ]
+            }
+        if operation == "knowledge.operations.list":
+            query = self._validate(KnowledgeListQuery, arguments)
+            knowledge_repository = self._require_dependency(self._knowledge, "knowledge")
+            return {
+                "operations": [
+                    item.model_dump(mode="json")
+                    for item in knowledge_repository.list_operations(
+                        project_id=query.project_id,
+                        offset=query.offset,
+                        limit=query.limit,
+                    )
+                ]
+            }
+        if operation == "knowledge.query":
+            query = self._validate(KnowledgeQuery, arguments)
+            command = ApplicationCommand(
+                command_type="knowledge.query",
+                actor_id=principal_id,
+                target_type="knowledge_query",
+                target_id=str(query.query_id),
+                payload={"query": query.model_dump(mode="json")},
+            )
+            return (await self._execute(command, principal_id)).model_dump(mode="json")
         command = self._validate(ApplicationCommand, arguments)
         if command.actor_id != principal_id:
             raise MishkanError(
@@ -357,11 +414,19 @@ class McpFacadeRouter:
             "mishkan://conversations": "conversation.list",
             "mishkan://advisory/candidates": "advisory.candidates.list",
             "mishkan://notifications": "notification.list",
+            "mishkan://knowledge/sources": "knowledge.sources.list",
+            "mishkan://knowledge/operations": "knowledge.operations.list",
         }
         operation = operation_by_uri[uri]
         arguments = (
             {"limit": self._event_page_limit}
-            if operation in {"mission.list", "conversation.list", "notification.list"}
+            if operation
+            in {
+                "mission.list",
+                "conversation.list",
+                "notification.list",
+                "knowledge.operations.list",
+            }
             else {}
         )
         return await self.invoke(operation, arguments, principal_id=principal_id)
