@@ -21,7 +21,7 @@ class DaemonPaths:
 
     @classmethod
     def from_config(cls, config: MishkanConfig) -> DaemonPaths:
-        if config.schema_version not in {"1.2", "1.3", "1.4", "1.5"} or not all(
+        if config.schema_version not in {"1.2", "1.3", "1.4", "1.5", "1.6"} or not all(
             (config.daemon, config.persistence, config.artifacts, config.sessions)
         ):
             raise MishkanError(

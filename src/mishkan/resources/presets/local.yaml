@@ -1,4 +1,4 @@
-schema_version: "1.5"
+schema_version: "1.6"
 mode: local
 engineering_profile: package://mishkan.resources.environment/default.yaml
 engineering_pack_sources:
@@ -184,8 +184,32 @@ browser:
   max_observation_bytes: 2097152
   max_diagnostic_entries: 10000
 mcp:
-  connections: {}
+  connections:
+    graphify-local:
+      transport: streamable_http
+      protocol_strategy: compatible_set
+      protocol_versions: ["2025-11-25"]
+      trust: local-self-hosted
+      exposure_profile: graphify-read
+      credential_refs:
+        - source: env
+          locator: MISHKAN_GRAPHIFY_API_KEY
+      network_profile: local-services
+      endpoint: http://127.0.0.1:7778/mcp
+      headers:
+        x-api-key:
+          source: env
+          locator: MISHKAN_GRAPHIFY_API_KEY
+      enabled: true
+      remote_tasks_enabled: false
+      connect_timeout_seconds: 5.0
+      call_timeout_seconds: 30.0
+      max_result_bytes: 2097152
   exposure_profiles:
+    graphify-read:
+      operations: [query_graph, get_node, get_neighbors, get_community, god_nodes, graph_stats, shortest_path]
+      resources: []
+      prompts: []
     governed-harness:
       operations:
         - system.health
@@ -227,6 +251,73 @@ mcp:
   cancellation_poll_seconds: 0.1
   task_poll_min_seconds: 0.1
   task_poll_max_seconds: 5.0
+knowledge:
+  staging_root: .mishkan/knowledge
+  sources:
+    literal-native:
+      knowledge_class: literal
+      adapter: native.literal
+      disclosure_profile: repository-scoped
+      cost_class: local_free
+      query_timeout_seconds: 10.0
+      operation_timeout_seconds: 30.0
+      max_results: 100
+      max_result_bytes: 16777216
+      provider_schema: mishkan-literal-1
+    mem0-local:
+      knowledge_class: episodic
+      adapter: mem0.oss
+      endpoint: http://127.0.0.1:7776
+      credential_refs:
+        - source: env
+          locator: MISHKAN_MEM0_API_KEY
+      credential_header: x-api-key
+      network_profile: local-services
+      disclosure_profile: project-private
+      cost_class: local_free
+      query_timeout_seconds: 10.0
+      operation_timeout_seconds: 120.0
+      max_results: 50
+      max_result_bytes: 2097152
+      provider_schema: mem0-oss-rest-2
+    cognee-local:
+      knowledge_class: semantic
+      adapter: cognee.oss
+      endpoint: http://127.0.0.1:7777/api/v1
+      credential_refs:
+        - source: env
+          locator: MISHKAN_COGNEE_BEARER
+      credential_header: authorization
+      credential_prefix: "Bearer "
+      network_profile: local-services
+      disclosure_profile: project-private
+      cost_class: local_free
+      query_timeout_seconds: 30.0
+      operation_timeout_seconds: 1800.0
+      max_results: 50
+      max_result_bytes: 8388608
+      provider_schema: cognee-rest-1
+    graphify-local:
+      knowledge_class: structural
+      adapter: graphify.mcp
+      mcp_connection: graphify-local
+      disclosure_profile: repository-scoped
+      cost_class: local_free
+      query_timeout_seconds: 30.0
+      operation_timeout_seconds: 1800.0
+      max_results: 100
+      max_result_bytes: 2097152
+      provider_schema: graphify-mcp-1
+  selection_order:
+    literal: [literal-native]
+    episodic: [mem0-local]
+    semantic: [cognee-local]
+    structural: [graphify-local]
+  literal_fallback: true
+  promotion_approver_identities: [CTO, CEO]
+  capture_max_characters: 16384
+  operation_poll_seconds: 0.25
+  query_retention_days: 90
 skills:
   managed_root: .mishkan/skills/active
   sources:

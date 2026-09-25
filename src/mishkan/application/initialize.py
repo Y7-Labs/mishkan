@@ -42,7 +42,7 @@ class MishkanInitializer:
         *,
         on_run_started: Callable[[str], None] | None = None,
     ) -> InitializationReport:
-        if config.schema_version not in {"1.1", "1.2", "1.3", "1.4", "1.5"}:
+        if config.schema_version not in {"1.1", "1.2", "1.3", "1.4", "1.5", "1.6"}:
             raise MishkanError(
                 ErrorCode.VERSION,
                 "governed initialization requires configuration schema 1.1 or 1.2",
@@ -102,7 +102,7 @@ class MishkanInitializer:
                     | frozenset({ContainerCommandAdapter.adapter_id})
                 ),
             )
-        if config.schema_version in {"1.3", "1.4", "1.5"}:
+        if config.schema_version in {"1.3", "1.4", "1.5", "1.6"}:
             artifact_config = config.artifacts
             assert artifact_config is not None
             durable_artifacts = DurableArtifactService(

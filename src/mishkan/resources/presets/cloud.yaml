@@ -1,4 +1,4 @@
-schema_version: "1.5"
+schema_version: "1.6"
 mode: cloud
 engineering_profile: package://mishkan.resources.environment/default.yaml
 engineering_pack_sources:
@@ -219,6 +219,26 @@ mcp:
   cancellation_poll_seconds: 0.1
   task_poll_min_seconds: 0.1
   task_poll_max_seconds: 5.0
+knowledge:
+  staging_root: .mishkan/knowledge
+  sources:
+    literal-native:
+      knowledge_class: literal
+      adapter: native.literal
+      disclosure_profile: repository-scoped
+      cost_class: local_free
+      query_timeout_seconds: 10.0
+      operation_timeout_seconds: 30.0
+      max_results: 100
+      max_result_bytes: 16777216
+      provider_schema: mishkan-literal-1
+  selection_order:
+    literal: [literal-native]
+  literal_fallback: true
+  promotion_approver_identities: [CTO, CEO]
+  capture_max_characters: 16384
+  operation_poll_seconds: 0.25
+  query_retention_days: 90
 skills:
   managed_root: .mishkan/skills/active
   sources:
