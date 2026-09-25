@@ -345,21 +345,48 @@ class KnowledgeService:
         return bundle
 
     def context_entry(self, bundle: KnowledgeBundle, *, order: int) -> ContextPackEntry:
+        return self.context_entries(bundle, start_order=order)[0]
+
+    def context_entries(
+        self,
+        bundle: KnowledgeBundle,
+        *,
+        start_order: int,
+    ) -> tuple[ContextPackEntry, ...]:
+        """Bind bundle lineage and every bounded evidence body into a Context Pack."""
         manifest = self._artifacts.manifest(bundle.bundle_reference)
-        return ContextPackEntry(
-            logical_path=(
-                f"knowledge/{bundle.query.knowledge_class.value}/{bundle.query.query_id}.json"
-            ),
-            layer="knowledge",
-            order=order,
-            artifact_reference=bundle.bundle_reference,
-            digest=bundle.bundle_digest,
-            size_bytes=manifest.size_bytes,
-            media_type=manifest.declared_media_type,
-            sensitivity=manifest.sensitivity,
-            required=bundle.query.required,
-            source_revision=bundle.query.scope.repository_revision,
-        )
+        base = f"knowledge/{bundle.query.knowledge_class.value}/{bundle.query.query_id}"
+        entries = [
+            ContextPackEntry(
+                logical_path=f"{base}/bundle.json",
+                layer="knowledge",
+                order=start_order,
+                artifact_reference=bundle.bundle_reference,
+                digest=bundle.bundle_digest,
+                size_bytes=manifest.size_bytes,
+                media_type=manifest.declared_media_type,
+                sensitivity=manifest.sensitivity,
+                required=bundle.query.required,
+                source_revision=bundle.query.scope.repository_revision,
+            )
+        ]
+        for offset, item in enumerate(bundle.items, start=1):
+            item_manifest = self._artifacts.manifest(item.content_reference)
+            entries.append(
+                ContextPackEntry(
+                    logical_path=f"{base}/items/{item.rank:04d}-{item.item_id}.evidence",
+                    layer="knowledge",
+                    order=start_order + offset,
+                    artifact_reference=item.content_reference,
+                    digest=item.content_digest,
+                    size_bytes=item_manifest.size_bytes,
+                    media_type=item_manifest.declared_media_type,
+                    sensitivity=item_manifest.sensitivity,
+                    required=bundle.query.required,
+                    source_revision=item.source_revision,
+                )
+            )
+        return tuple(entries)
 
     def _query_fallback(
         self,

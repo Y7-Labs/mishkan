@@ -153,6 +153,7 @@ def test_query_publishes_attributed_artifacts_and_context_entry(tmp_path: Path) 
 
     bundle = service.query(query)
     context_entry = service.context_entry(bundle, order=30)
+    context_entries = service.context_entries(bundle, start_order=30)
 
     assert bundle.degraded is False
     assert bundle.items[0].staleness is KnowledgeStaleness.CURRENT
@@ -162,6 +163,10 @@ def test_query_publishes_attributed_artifacts_and_context_entry(tmp_path: Path) 
     assert payload["items"][0]["trust"] == "untrusted_evidence"
     assert context_entry.artifact_reference == bundle.bundle_reference
     assert context_entry.layer == "knowledge"
+    assert context_entries[0] == context_entry
+    assert len(context_entries) == 2
+    assert context_entries[1].artifact_reference == bundle.items[0].content_reference
+    assert context_entries[1].logical_path.endswith(".evidence")
     assert repository.query(query.query_id).state is KnowledgeQueryState.COMPLETED
 
 
