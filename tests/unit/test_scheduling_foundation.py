@@ -456,6 +456,69 @@ async def test_overlap_blocks_second_dispatch_before_run_effect(tmp_path: Path) 
 
 
 @pytest.mark.anyio
+async def test_concurrent_dispatch_atomically_claims_one_overlap_key(tmp_path: Path) -> None:
+    import asyncio
+
+    repository = _repository(tmp_path)
+    request_a = _request()
+    request_b = request_a.model_copy(update={"schedule_id": uuid4()})
+    schedule_a = repository.create(
+        request_a,
+        actor_id="operator",
+        policy_fingerprint="a" * 64,
+        next_fire_at=request_a.trigger.run_at,
+    )
+    schedule_b = repository.create(
+        request_b,
+        actor_id="operator",
+        policy_fingerprint="b" * 64,
+        next_fire_at=request_b.trigger.run_at,
+    )
+    occurrence_a = repository.create_occurrence(
+        schedule_a,
+        occurrence_key="manual:concurrent-a",
+        source=OccurrenceSource.MANUAL,
+        scheduled_for=request_a.trigger.run_at,
+    )
+    occurrence_b = repository.create_occurrence(
+        schedule_b,
+        occurrence_key="manual:concurrent-b",
+        source=OccurrenceSource.MANUAL,
+        scheduled_for=request_b.trigger.run_at,
+    )
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    observed_commands = 0
+
+    async def execute(command: object, _principal_id: str) -> CommandResult:
+        nonlocal observed_commands
+        from mishkan.application import ApplicationCommand
+
+        assert isinstance(command, ApplicationCommand)
+        observed_commands += 1
+        first_started.set()
+        await release_first.wait()
+        return CommandResult(
+            command_id=command.command_id,
+            status=CommandStatus.REFUSED,
+            target_type="run",
+            error=MishkanError(ErrorCode.AUTHORITY_NOT_GRANTED, "fixture refusal").envelope,
+        )
+
+    driver = ScheduleDriver(_scheduling_config(), repository, execute)
+    first = asyncio.create_task(driver.dispatch(occurrence_a.occurrence_id))
+    await first_started.wait()
+    await driver.dispatch(occurrence_b.occurrence_id)
+    release_first.set()
+    await first
+
+    assert observed_commands == 1
+    assert (
+        repository.occurrence(occurrence_b.occurrence_id).state is OccurrenceState.OVERLAP_BLOCKED
+    )
+
+
+@pytest.mark.anyio
 async def test_driver_tick_submits_due_internal_trigger_without_direct_effect(
     tmp_path: Path,
 ) -> None:
@@ -625,3 +688,29 @@ def test_os_exports_invoke_the_same_daemon_trigger_surface(tmp_path: Path) -> No
             and f"<string>{schedule.schedule_id}</string>" in rendered
         )
         assert "run.initialize" not in rendered
+
+
+def test_one_shot_exports_preserve_the_authoritative_instant_across_host_timezones(
+    tmp_path: Path,
+) -> None:
+    from datetime import timedelta, timezone
+
+    repository = _repository(tmp_path)
+    run_at = datetime(2030, 2, 3, 10, 45, tzinfo=timezone(timedelta(hours=2)))
+    request = ScheduleCreateRequest(
+        mission=ScheduleMissionRequest(project_id="project-a", objective="Run checks"),
+        trigger=DateTriggerSpec(run_at=run_at),
+    )
+    schedule = repository.create(
+        request,
+        actor_id="operator",
+        policy_fingerprint="d" * 64,
+        next_fire_at=run_at,
+    )
+
+    cron = render_schedule_export(schedule, ScheduleExportTarget.CRON)
+    launchd = render_schedule_export(schedule, ScheduleExportTarget.LAUNCHD)
+
+    assert "CRON_TZ=UTC\n45 8 3 2 *" in cron
+    assert "<key>StartInterval</key><integer>60</integer>" in launchd
+    assert "StartCalendarInterval" not in launchd

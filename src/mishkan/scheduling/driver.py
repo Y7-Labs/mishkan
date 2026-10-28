@@ -43,6 +43,7 @@ class ScheduleDriver:
         self._execute = execute_command
         self._scheduler = AsyncIOScheduler(timezone=UTC)
         self._tick_lock = asyncio.Lock()
+        self._dispatch_lock = asyncio.Lock()
         self._dispatch_tasks: set[asyncio.Task[None]] = set()
 
     def start(self) -> None:
@@ -106,33 +107,40 @@ class ScheduleDriver:
         await self.tick()
 
     async def dispatch(self, occurrence_id: UUID) -> None:
-        occurrence = await asyncio.to_thread(self._repository.occurrence, occurrence_id)
-        if occurrence.state not in {OccurrenceState.PENDING, OccurrenceState.RETRY_WAITING}:
-            return
-        schedule = await asyncio.to_thread(self._repository.schedule, occurrence.schedule_id)
-        if schedule.overlap_mode is OverlapMode.BLOCK and await asyncio.to_thread(
-            self._repository.has_active_overlap,
-            schedule,
-            excluding=occurrence_id,
-        ):
-            await asyncio.to_thread(
-                self._repository.settle_occurrence,
-                occurrence_id,
-                state=OccurrenceState.OVERLAP_BLOCKED,
-                error_code=ErrorCode.SCHEDULE,
-                error_message="another run for the same schedule target remains active",
-            )
-            return
+        # I08 is a single-daemon authority. Serialize the overlap check and durable
+        # claim so two locally enqueued occurrences cannot both pass the check
+        # before either becomes visible as dispatching.
+        async with self._dispatch_lock:
+            occurrence = await asyncio.to_thread(self._repository.occurrence, occurrence_id)
+            if occurrence.state not in {
+                OccurrenceState.PENDING,
+                OccurrenceState.RETRY_WAITING,
+            }:
+                return
+            schedule = await asyncio.to_thread(self._repository.schedule, occurrence.schedule_id)
+            if schedule.overlap_mode is OverlapMode.BLOCK and await asyncio.to_thread(
+                self._repository.has_active_overlap,
+                schedule,
+                excluding=occurrence_id,
+            ):
+                await asyncio.to_thread(
+                    self._repository.settle_occurrence,
+                    occurrence_id,
+                    state=OccurrenceState.OVERLAP_BLOCKED,
+                    error_code=ErrorCode.SCHEDULE,
+                    error_message="another run for the same schedule target remains active",
+                )
+                return
 
-        run_command_id = uuid5(
-            NAMESPACE_URL,
-            f"mishkan:schedule-dispatch:{occurrence_id}:{occurrence.attempt_count + 1}",
-        )
-        claimed = await asyncio.to_thread(
-            self._repository.claim_dispatch,
-            occurrence_id,
-            run_command_id=run_command_id,
-        )
+            run_command_id = uuid5(
+                NAMESPACE_URL,
+                f"mishkan:schedule-dispatch:{occurrence_id}:{occurrence.attempt_count + 1}",
+            )
+            claimed = await asyncio.to_thread(
+                self._repository.claim_dispatch,
+                occurrence_id,
+                run_command_id=run_command_id,
+            )
         command = self._run_command(schedule, claimed)
         try:
             result = await self._execute(command, schedule.created_by)

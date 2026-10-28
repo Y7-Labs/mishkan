@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC
 from enum import StrEnum
 
 from mishkan.scheduling.models import CronTriggerSpec, DateTriggerSpec, ScheduleRecord
@@ -42,11 +43,10 @@ def render_schedule_export(
             f"[Timer]\n{timer}\nAccuracySec=1s\n\n"
             "[Install]\nWantedBy=timers.target\n"
         )
-    interval = (
-        "<key>StartInterval</key><integer>60</integer>"
-        if isinstance(trigger, CronTriggerSpec)
-        else _launchd_calendar(trigger)
-    )
+    # launchd's calendar intervals have no per-job timezone. A bounded wake-up
+    # interval lets the daemon compare the authoritative aware instant instead
+    # of translating it into the host's wall clock.
+    interval = "<key>StartInterval</key><integer>60</integer>"
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
@@ -62,17 +62,5 @@ def render_schedule_export(
 
 
 def _date_cron(trigger: DateTriggerSpec) -> str:
-    instant = trigger.run_at
+    instant = trigger.run_at.astimezone(UTC)
     return f"{instant.minute} {instant.hour} {instant.day} {instant.month} *"
-
-
-def _launchd_calendar(trigger: DateTriggerSpec) -> str:
-    instant = trigger.run_at
-    return (
-        "<key>StartCalendarInterval</key><dict>"
-        f"<key>Month</key><integer>{instant.month}</integer>"
-        f"<key>Day</key><integer>{instant.day}</integer>"
-        f"<key>Hour</key><integer>{instant.hour}</integer>"
-        f"<key>Minute</key><integer>{instant.minute}</integer>"
-        "</dict>"
-    )
