@@ -33,8 +33,10 @@ I06 is integrated and closed. D-045 authorized I07 Attributed Knowledge and Degr
 `feat/i07-attributed-knowledge`. D-046 accepts its complete gate at `9bafa68`: the deterministic
 local suite, authenticated live mem0/Cognee/Graphify stack, performance gates, versioned schema
 catalogue, and seven-job Linux/macOS Python 3.11–3.13 matrix are green. I07 is closed on its topic
-branch and may be promoted through `develop` to `main`. I08 and later increments remain
-unauthorized until an explicit engineer decision starts the next increment after promotion.
+branch, integrated into `develop` at `4de87b2`, and promoted to `main` at `0b6c64c`; both integration
+matrices are green. D-047 authorizes I08 Persistent Headless Scheduling on
+`feat/i08-persistent-scheduling`. I08 implementation and acceptance remain open; I09 and later
+increments remain unauthorized until explicit engineer decisions.
 The rejected
 universal workflow, mandatory outcome catalogue, capability-family matrix, static role/tool matrix,
 competing runtime, and private operational deny-list must not return.
