@@ -10,19 +10,23 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from mishkan.application import ApplicationCommand
 from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.domain.time import utc_now
-from mishkan.persistence import SchemaManager
+from mishkan.persistence import SchemaManager, SQLiteApplicationRepository
 from mishkan.persistence.sqlite import (
     WorkerCertificateRow,
     WorkerEnrollmentTokenRow,
     create_local_engine,
 )
 from mishkan.workers import (
+    EnrollmentCredential,
     EnrollmentState,
     WorkerCertificateAuthority,
+    WorkerCertificateBundle,
     WorkerEnrollmentRequest,
     WorkerEnrollmentService,
     WorkerIdentityRepository,
@@ -53,8 +57,8 @@ def _ca_material() -> tuple[str, str]:
                 key_agreement=False,
                 key_cert_sign=True,
                 crl_sign=True,
-                encipher_only=None,
-                decipher_only=None,
+                encipher_only=False,
+                decipher_only=False,
             ),
             critical=True,
         )
@@ -98,7 +102,10 @@ def _service(tmp_path: Path) -> tuple[WorkerEnrollmentService, WorkerIdentityRep
     return service, repository, database
 
 
-def _enroll(service: WorkerEnrollmentService, worker_id: UUID | None = None):
+def _enroll(
+    service: WorkerEnrollmentService,
+    worker_id: UUID | None = None,
+) -> tuple[UUID, EnrollmentCredential, WorkerCertificateBundle]:
     worker_id = worker_id or uuid4()
     credential = service.create_enrollment(actor_id="CTO")
     _, csr = _csr()
@@ -266,3 +273,106 @@ def test_weak_worker_key_and_mismatched_ca_are_rejected(tmp_path: Path) -> None:
     with pytest.raises(MishkanError) as caught:
         authority.sign_worker_csr(uuid4(), weak_csr, lifetime_seconds=3_600)
     assert caught.value.envelope.code is ErrorCode.WORKER
+
+
+def test_enrollment_command_is_atomic_idempotent_and_never_persists_secret(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "mishkan.db"
+    SchemaManager(database).initialize()
+    application = SQLiteApplicationRepository(database)
+    workers = WorkerIdentityRepository(database)
+    token_id = uuid4()
+    secret = "one-time-secret-that-must-never-be-persisted"
+    digest = hashlib.sha256(secret.encode()).hexdigest()
+    command = ApplicationCommand(
+        command_type="worker.enrollment.create",
+        actor_id="CTO",
+        target_type="worker_enrollment",
+        target_id=str(token_id),
+        payload={"token_digest": digest},
+    )
+
+    def mutate(
+        session: Session,
+        _revision: int,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        expires_at = utc_now() + timedelta(minutes=10)
+        workers.create_enrollment_token_in_session(
+            session,
+            token_id=token_id,
+            token_digest=digest,
+            actor_id="CTO",
+            expires_at=expires_at,
+        )
+        result: dict[str, object] = {
+            "token_id": str(token_id),
+            "expires_at": expires_at.isoformat(),
+        }
+        return result, result
+
+    first = application.accept_with_mutation(
+        command,
+        target_id=str(token_id),
+        event_type="worker.enrollment_token_created",
+        mutation=mutate,
+    )
+    replay = application.accept_with_mutation(
+        command,
+        target_id=str(token_id),
+        event_type="worker.enrollment_token_created",
+        mutation=mutate,
+    )
+
+    assert replay == first
+    with Session(create_local_engine(database)) as session:
+        token = session.get(WorkerEnrollmentTokenRow, str(token_id))
+        assert token is not None and token.token_digest == digest
+        rows = session.execute(
+            text(
+                "SELECT result_payload FROM application_commands "
+                "UNION ALL SELECT payload FROM event_outbox"
+            )
+        ).scalars()
+        persisted = "\n".join(rows)
+    assert secret not in persisted
+    assert digest not in persisted
+
+
+def test_worker_revision_remains_aligned_with_application_command_authority(
+    tmp_path: Path,
+) -> None:
+    service, workers, database = _service(tmp_path)
+    worker_id, _, _bundle = _enroll(service)
+    application = SQLiteApplicationRepository(database)
+    command = ApplicationCommand(
+        command_type="worker.revoke",
+        actor_id="CTO",
+        target_type="worker",
+        target_id=str(worker_id),
+        expected_revision=1,
+        payload={},
+    )
+
+    def mutate(
+        session: Session,
+        _revision: int,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        identity = workers.revoke_worker_in_session(
+            session,
+            worker_id,
+            expected_revision=1,
+        )
+        payload = identity.model_dump(mode="json")
+        return payload, {"worker_id": str(worker_id), "revision": identity.revision}
+
+    result = application.accept_with_mutation(
+        command,
+        target_id=str(worker_id),
+        event_type="worker.revoked",
+        mutation=mutate,
+    )
+
+    assert result.revision == 2
+    assert result.payload["state"] == WorkerState.REVOKED.value
+    assert workers.identity(worker_id).revision == 2

@@ -230,6 +230,7 @@ class DistributedConfig(StrictConfigModel):
     max_worker_concurrency: int = Field(default=8, ge=1, le=10_000)
     max_envelope_bytes: int = Field(default=8_388_608, ge=1, le=1_073_741_824)
     max_completion_bytes: int = Field(default=67_108_864, ge=1, le=1_073_741_824)
+    server_ca_certificate_ref: CredentialReference
     server_certificate_ref: CredentialReference
     server_private_key_ref: CredentialReference
     worker_ca_certificate_ref: CredentialReference

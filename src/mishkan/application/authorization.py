@@ -169,6 +169,15 @@ COMMAND_SEMANTICS = MappingProxyType(
         "schedule.trigger": CommandSemantics(
             "application.schedule.trigger", "coordination", ("schedule.trigger",)
         ),
+        "worker.enrollment.create": CommandSemantics(
+            "application.worker.enrollment", "control", ("worker.enrollment.create",)
+        ),
+        "worker.enrollment.revoke": CommandSemantics(
+            "application.worker.enrollment", "control", ("worker.enrollment.revoke",)
+        ),
+        "worker.revoke": CommandSemantics(
+            "application.worker.identity", "control", ("worker.revoke",)
+        ),
         "artifact.upload.open": CommandSemantics(
             "application.artifact.upload", "artifact", ("artifact.stage",)
         ),
@@ -452,6 +461,9 @@ _COMMAND_TARGETS = MappingProxyType(
         "schedule.remove": ("schedule", "uuid"),
         "schedule.run_now": ("schedule", "uuid"),
         "schedule.trigger": ("schedule", "uuid"),
+        "worker.enrollment.create": ("worker_enrollment", "uuid"),
+        "worker.enrollment.revoke": ("worker_enrollment", "uuid"),
+        "worker.revoke": ("worker", "uuid"),
         "artifact.upload.open": ("artifact_service", "absent"),
         "artifact.upload.chunk": ("artifact_upload", "uuid"),
         "artifact.upload.commit": ("artifact_upload", "uuid"),
@@ -565,6 +577,9 @@ _COMMAND_PAYLOAD_FIELDS = MappingProxyType(
         "schedule.remove": (frozenset(), frozenset()),
         "schedule.run_now": (frozenset(), frozenset()),
         "schedule.trigger": (frozenset({"request"}), frozenset()),
+        "worker.enrollment.create": (frozenset({"token_digest"}), frozenset()),
+        "worker.enrollment.revoke": (frozenset(), frozenset()),
+        "worker.revoke": (frozenset(), frozenset()),
         "artifact.upload.open": (
             frozenset({"expected_size", "expected_digest", "media_type", "provenance"}),
             frozenset({"sensitivity", "retention"}),
@@ -875,6 +890,26 @@ class ApplicationCommandAuthority:
                 external_resources = (f"schedule:{normalized.target_id}",)
             elif normalized.command_type.startswith("schedule."):
                 external_resources = (f"schedule:{normalized.target_id}",)
+            elif normalized.command_type == "worker.enrollment.create":
+                digest = normalized.payload["token_digest"]
+                if (
+                    not isinstance(digest, str)
+                    or len(digest) != 64
+                    or any(character not in "0123456789abcdef" for character in digest)
+                ):
+                    raise ValueError("worker enrollment token digest must be lowercase SHA-256")
+                if self._config.distributed is None:
+                    raise MishkanError(
+                        ErrorCode.REQUIRED_DEPENDENCY,
+                        "distributed worker enrollment is not configured",
+                    )
+                external_resources = (f"worker-enrollment:{normalized.target_id}",)
+            elif normalized.command_type == "worker.enrollment.revoke":
+                external_resources = (f"worker-enrollment:{normalized.target_id}",)
+            elif normalized.command_type == "worker.revoke":
+                if normalized.expected_revision is None:
+                    raise ValueError("worker revocation requires an expected revision")
+                external_resources = (f"worker:{normalized.target_id}",)
             elif normalized.command_type == "run.repository.establish":
                 repository_establishment_request = RepositoryEstablishmentRequest.model_validate(
                     normalized.payload

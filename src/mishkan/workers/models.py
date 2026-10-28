@@ -31,7 +31,7 @@ class CertificateState(StrEnum):
 class EnrollmentCredential(DomainRecord):
     """One-time credential. SecretStr prevents accidental repr or JSON disclosure."""
 
-    token: SecretStr
+    token: SecretStr = Field(min_length=43, max_length=256)
     expires_at: datetime
 
     @field_validator("expires_at")
@@ -43,13 +43,19 @@ class EnrollmentCredential(DomainRecord):
 class WorkerEnrollmentRequest(DomainRecord):
     worker_id: UUID
     display_name: str = Field(min_length=1, max_length=160)
-    token: SecretStr
+    token: SecretStr = Field(min_length=43, max_length=256)
     certificate_signing_request_pem: str = Field(min_length=1, max_length=1_048_576)
 
 
 class WorkerRotationRequest(DomainRecord):
     worker_id: UUID
     current_certificate_serial: str = Field(min_length=1, max_length=128)
+    certificate_signing_request_pem: str = Field(min_length=1, max_length=1_048_576)
+
+
+class WorkerCertificateRotationRequest(DomainRecord):
+    """Public rotation payload; worker identity is derived only from the mTLS peer."""
+
     certificate_signing_request_pem: str = Field(min_length=1, max_length=1_048_576)
 
 

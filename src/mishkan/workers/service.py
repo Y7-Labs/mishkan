@@ -81,10 +81,14 @@ class WorkerEnrollmentService:
         return self._repository.revoke_worker(worker_id, expected_revision=expected_revision)
 
     def authenticate_certificate(self, certificate_pem: str) -> WorkerIdentity:
+        identity, _serial = self.authenticate_peer(certificate_pem)
+        return identity
+
+    def authenticate_peer(self, certificate_pem: str) -> tuple[WorkerIdentity, str]:
         worker_id, serial, fingerprint = self._certificate_authority.inspect_worker_certificate(
             certificate_pem
         )
-        return self._repository.authenticate(worker_id, serial, fingerprint)
+        return self._repository.authenticate(worker_id, serial, fingerprint), serial
 
     def _bundle(
         self,

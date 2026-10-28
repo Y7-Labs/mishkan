@@ -493,6 +493,9 @@
           "title": "Max Worker Concurrency",
           "type": "integer"
         },
+        "server_ca_certificate_ref": {
+          "$ref": "#/$defs/CredentialReference"
+        },
         "server_certificate_ref": {
           "$ref": "#/$defs/CredentialReference"
         },
@@ -507,6 +510,7 @@
         }
       },
       "required": [
+        "server_ca_certificate_ref",
         "server_certificate_ref",
         "server_private_key_ref",
         "worker_ca_certificate_ref",

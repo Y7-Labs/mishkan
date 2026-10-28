@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -147,9 +148,10 @@ def test_sdk_emits_versioned_prospective_and_repository_establishment_commands(
 def test_schedule_sdk_emits_the_governed_versioned_command(tmp_path: Path) -> None:
     token_file = tmp_path / "token.json"
     TokenFile(token_file).create("PM")
+    run_at = datetime(2099, 1, 1, tzinfo=UTC)
     request = ScheduleCreateRequest(
         mission=ScheduleMissionRequest(project_id="project-a", objective="Run verified checks"),
-        trigger=DateTriggerSpec(run_at=datetime(2099, 1, 1, tzinfo=UTC)),
+        trigger=DateTriggerSpec(run_at=run_at),
     )
     commands: list[dict[str, object]] = []
 
@@ -167,7 +169,7 @@ def test_schedule_sdk_emits_the_governed_versioned_command(tmp_path: Path) -> No
             "overlap_mode": "block",
             "created_by": "PM",
             "preauthorization_policy_fingerprint": "a" * 64,
-            "next_fire_at": request.trigger.run_at.isoformat(),
+            "next_fire_at": run_at.isoformat(),
             "last_evaluated_at": None,
             "revision": 1,
             "created_at": now,
@@ -201,6 +203,54 @@ def test_schedule_sdk_emits_the_governed_versioned_command(tmp_path: Path) -> No
     assert commands[0]["command_type"] == "schedule.create"
     assert commands[0]["expected_revision"] == 0
     assert commands[0]["payload"] == {"request": request.model_dump(mode="json")}
+
+
+def test_worker_sdk_keeps_one_time_secret_out_of_the_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token_file = tmp_path / "token.json"
+    TokenFile(token_file).create("CTO")
+    secret = "worker-enrollment-secret-with-sufficient-entropy"
+    monkeypatch.setattr("mishkan.client.secrets.token_urlsafe", lambda _size: secret)
+    commands: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        command = json.loads(request.content)
+        commands.append(command)
+        now = datetime.now(UTC)
+        return httpx.Response(
+            200,
+            json={
+                "schema_version": "1.0",
+                "command_id": command["command_id"],
+                "status": "accepted",
+                "target_type": "worker_enrollment",
+                "target_id": command["target_id"],
+                "revision": 1,
+                "event_cursor": 1,
+                "payload": {
+                    "token_id": command["target_id"],
+                    "expires_at": (now + timedelta(minutes=10)).isoformat(),
+                },
+                "error": None,
+                "completed_at": now.isoformat(),
+            },
+        )
+
+    with Mishkan("http://mishkand.test", token_file=token_file) as client:
+        client._client.close()
+        client._client = httpx.Client(
+            base_url="http://mishkand.test",
+            transport=httpx.MockTransport(handler),
+        )
+        credential = client.workers.create_enrollment()
+
+    assert credential.token.get_secret_value() == secret
+    assert commands[0]["command_type"] == "worker.enrollment.create"
+    serialized = json.dumps(commands[0])
+    assert secret not in serialized
+    assert commands[0]["payload"] == {"token_digest": hashlib.sha256(secret.encode()).hexdigest()}
 
 
 def test_sdk_bounded_query_surfaces_use_authenticated_versioned_routes(tmp_path: Path) -> None:

@@ -19,6 +19,12 @@ from mishkan.crewai.credentials import CredentialPoolResolver
 from mishkan.daemon.bootstrap import DaemonPaths
 from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.persistence.runtime import DEFAULT_BUSY_TIMEOUT_MS, DatabaseRuntime
+from mishkan.workers import (
+    WorkerCertificateAuthority,
+    WorkerEnrollmentService,
+    WorkerIdentityRepository,
+)
+from mishkan.workers.transport import DistributedTlsFiles
 
 
 def build_database_runtime(
@@ -83,6 +89,45 @@ def repository_busy_timeout_ms(config: MishkanConfig) -> int:
         persistence.busy_timeout_ms
         if isinstance(persistence, PersistenceConfig)
         else DEFAULT_BUSY_TIMEOUT_MS
+    )
+
+
+def build_worker_identity_services(
+    config: MishkanConfig,
+    database: DatabaseRuntime,
+    credentials: CredentialPoolResolver,
+) -> tuple[WorkerIdentityRepository, WorkerEnrollmentService] | None:
+    distributed = config.distributed
+    if distributed is None:
+        return None
+    authority = WorkerCertificateAuthority(
+        _resolve_required(credentials, distributed.worker_ca_certificate_ref),
+        _resolve_required(credentials, distributed.worker_ca_private_key_ref),
+    )
+    repository = WorkerIdentityRepository(
+        database,
+        busy_timeout_ms=repository_busy_timeout_ms(config),
+    )
+    service = WorkerEnrollmentService(
+        repository,
+        authority,
+        enrollment_ttl_seconds=distributed.enrollment_ttl_seconds,
+        certificate_ttl_seconds=distributed.certificate_ttl_seconds,
+    )
+    return repository, service
+
+
+def build_distributed_tls_files(
+    config: MishkanConfig,
+    credentials: CredentialPoolResolver,
+) -> DistributedTlsFiles:
+    distributed = config.distributed
+    if distributed is None:
+        raise MishkanError(ErrorCode.CONFIGURATION, "distributed TLS is not configured")
+    return DistributedTlsFiles(
+        _resolve_required(credentials, distributed.server_certificate_ref),
+        _resolve_required(credentials, distributed.server_private_key_ref),
+        _resolve_required(credentials, distributed.worker_ca_certificate_ref),
     )
 
 

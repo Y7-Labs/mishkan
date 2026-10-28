@@ -225,6 +225,12 @@ from mishkan.web.models import (
     SearchRequest,
     SearchResponse,
 )
+from mishkan.workers.models import (
+    WorkerCertificateBundle,
+    WorkerCertificateRotationRequest,
+    WorkerEnrollmentRequest,
+    WorkerIdentity,
+)
 
 SCHEMAS: dict[str, type[BaseModel]] = {
     "application-command-v1.schema.json": ApplicationCommand,
@@ -248,6 +254,10 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "change-set-v1.schema.json": ChangeSet,
     "command-result-v1.schema.json": CommandResult,
     "config-v1.schema.json": MishkanConfig,
+    "worker-certificate-bundle-v1.schema.json": WorkerCertificateBundle,
+    "worker-certificate-rotation-request-v1.schema.json": WorkerCertificateRotationRequest,
+    "worker-enrollment-request-v1.schema.json": WorkerEnrollmentRequest,
+    "worker-identity-v1.schema.json": WorkerIdentity,
     "prospective-run-request-v1.schema.json": ProspectiveRunRequest,
     "repository-establishment-request-v1.schema.json": RepositoryEstablishmentRequest,
     "confirmed-engineer-fact-v1.schema.json": ConfirmedEngineerFact,

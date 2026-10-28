@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+from pathlib import Path
+from uuid import uuid4
 
 import pytest
 import yaml
 from pydantic import ValidationError
 
+from mishkan.application import ApplicationCommand
+from mishkan.application.authorization import ApplicationCommandAuthority
 from mishkan.artifacts.bodies import FilesystemArtifactBodyStore, S3ArtifactBodyStore
 from mishkan.config.models import (
     MishkanConfig,
@@ -15,10 +20,18 @@ from mishkan.config.models import (
 )
 from mishkan.config.presets import preset_text
 from mishkan.crewai.credentials import CredentialPoolResolver
-from mishkan.daemon.api import create_app
 from mishkan.daemon.bootstrap import DaemonPaths
 from mishkan.daemon.composition import build_artifact_body_store, build_database_runtime
 from mishkan.domain.errors import ErrorCode, MishkanError
+from mishkan.policy import Decision
+
+
+class _UnusedLookup:
+    def definition(self, _identity):  # type: ignore[no-untyped-def]
+        raise AssertionError("change lookup should not be used")
+
+    def status(self, _identity):  # type: ignore[no-untyped-def]
+        raise AssertionError("session lookup should not be used")
 
 
 def _distributed_document() -> dict[str, object]:
@@ -65,6 +78,7 @@ def _distributed_document() -> dict[str, object]:
         "max_worker_concurrency": 8,
         "max_envelope_bytes": 8_388_608,
         "max_completion_bytes": 67_108_864,
+        "server_ca_certificate_ref": reference,
         "server_certificate_ref": reference,
         "server_private_key_ref": reference,
         "worker_ca_certificate_ref": reference,
@@ -80,6 +94,7 @@ def test_distributed_mode_requires_explicit_postgresql_s3_and_worker_bounds() ->
     assert isinstance(config.persistence, PostgreSQLPersistenceConfig)
     assert isinstance(config.artifacts, S3ArtifactConfig)
     assert config.distributed is not None
+    assert config.distributed.server_ca_certificate_ref.locator.endswith("placeholder.pem")
 
 
 @pytest.mark.parametrize("missing", ["persistence", "artifacts", "distributed"])
@@ -160,8 +175,49 @@ def test_distributed_database_credential_is_late_resolved_and_required(tmp_path)
     assert failure.value.envelope.code is ErrorCode.CONFIGURATION
 
 
-def test_distributed_daemon_cannot_fall_back_to_plain_bearer_http() -> None:
+def test_distributed_daemon_requires_explicit_server_and_worker_ca_material() -> None:
     config = MishkanConfig.model_validate(_distributed_document())
 
-    with pytest.raises(MishkanError, match="mTLS listener"):
-        create_app(config)
+    assert config.distributed is not None
+    assert config.distributed.server_certificate_ref.locator.endswith("placeholder.pem")
+    assert config.distributed.server_private_key_ref.locator.endswith("placeholder.pem")
+    assert config.distributed.worker_ca_certificate_ref.locator.endswith("placeholder.pem")
+    assert config.distributed.worker_ca_private_key_ref.locator.endswith("placeholder.pem")
+
+
+def test_worker_admin_commands_have_public_policy_derived_authority(tmp_path: Path) -> None:
+    document = _distributed_document()
+    document["project"]["workspace"] = str(tmp_path)
+    config = MishkanConfig.model_validate(document)
+    authority = ApplicationCommandAuthority(
+        config,
+        tmp_path,
+        _UnusedLookup(),
+        _UnusedLookup(),
+    )
+    token_id = uuid4()
+    authorized = authority.authorize(
+        ApplicationCommand(
+            command_type="worker.enrollment.create",
+            actor_id="CTO",
+            target_type="worker_enrollment",
+            target_id=str(token_id),
+            payload={"token_digest": hashlib.sha256(b"secret").hexdigest()},
+        )
+    )
+
+    assert authorized.decision.decision is Decision.ALLOW
+    assert authorized.request.capability == "application.worker.enrollment"
+    assert authorized.request.external_resources == (f"worker-enrollment:{token_id}",)
+
+    with pytest.raises(MishkanError) as malformed:
+        authority.authorize(
+            ApplicationCommand(
+                command_type="worker.enrollment.create",
+                actor_id="CTO",
+                target_type="worker_enrollment",
+                target_id=str(uuid4()),
+                payload={"token_digest": "not-a-digest"},
+            )
+        )
+    assert malformed.value.envelope.code is ErrorCode.OUTPUT_CONTRACT

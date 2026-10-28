@@ -1809,7 +1809,7 @@ requires-dist = [
     { name = "sqlalchemy", specifier = ">=2,<3" },
     { name = "trafilatura", specifier = ">=2.2,<3" },
     { name = "typer", specifier = ">=0.16,<1" },
-    { name = "uvicorn", specifier = ">=0.52,<1" },
+    { name = "uvicorn", specifier = "==0.52.4" },
 ]
 
 [package.metadata.requires-dev]

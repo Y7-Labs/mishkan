@@ -7,13 +7,15 @@ import base64
 import json
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
 from typing import Annotated, Literal, ParamSpec, TypeVar
 from uuid import UUID
 
 import anyio
+from cryptography import x509
+from cryptography.hazmat.primitives import serialization
 from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -43,7 +45,7 @@ from mishkan.artifacts import (
     ArtifactHold as ArtifactEvidenceHold,
 )
 from mishkan.artifacts.service import DurableArtifactService
-from mishkan.config.models import CredentialReference, McpConfig, MishkanConfig, OperatingMode
+from mishkan.config.models import CredentialReference, McpConfig, MishkanConfig
 from mishkan.context import (
     CommunityCandidateLoader,
     ContextualRecommendation,
@@ -72,6 +74,7 @@ from mishkan.daemon.bootstrap import DaemonPaths
 from mishkan.daemon.composition import (
     build_artifact_body_store,
     build_database_runtime,
+    build_worker_identity_services,
     repository_busy_timeout_ms,
 )
 from mishkan.domain.errors import ErrorCode, MishkanError
@@ -234,6 +237,14 @@ from mishkan.tools.inspection import ContentInspector, InspectionProfileLoader
 from mishkan.tools.isolation import IsolationProfileLoader, observe_container_commands
 from mishkan.tools.lifecycle import ToolRegistryLifecycle
 from mishkan.web.network import HttpxWebTransport
+from mishkan.workers.models import (
+    WorkerCertificateBundle,
+    WorkerCertificateRotationRequest,
+    WorkerEnrollmentRequest,
+    WorkerIdentity,
+    WorkerRotationRequest,
+)
+from mishkan.workers.transport import peer_certificate_der
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
@@ -455,11 +466,6 @@ def create_app(
     mission_environment_runner: MissionEnvironmentPlanningRunner | None = None,
     telemetry_exporter_factory: Callable[[], TelemetryExporter] | None = None,
 ) -> FastAPI:
-    if config.mode is OperatingMode.DISTRIBUTED:
-        raise MishkanError(
-            ErrorCode.CONFIGURATION,
-            "distributed daemon startup requires the I09 mTLS listener boundary",
-        )
     paths = DaemonPaths.from_config(config)
     token_file = TokenFile(paths.token_file)
     token_file.read()
@@ -469,6 +475,17 @@ def create_app(
     database_runtime = build_database_runtime(config, paths, credential_resolver)
     SchemaManager(database_runtime).require_current()
     busy_timeout_ms = repository_busy_timeout_ms(config)
+    worker_identity_services = build_worker_identity_services(
+        config,
+        database_runtime,
+        credential_resolver,
+    )
+    worker_repository = (
+        worker_identity_services[0] if worker_identity_services is not None else None
+    )
+    worker_enrollment = (
+        worker_identity_services[1] if worker_identity_services is not None else None
+    )
     repository = SQLiteApplicationRepository(
         database_runtime,
         busy_timeout_ms=busy_timeout_ms,
@@ -1079,6 +1096,88 @@ def create_app(
                 if occurrence.state is OccurrenceState.PENDING:
                     schedule_driver.enqueue(occurrence.occurrence_id)
             return result
+        if command.command_type.startswith("worker."):
+            distributed_config = config.distributed
+            if worker_repository is None or distributed_config is None:
+                raise MishkanError(
+                    ErrorCode.REQUIRED_DEPENDENCY,
+                    "distributed worker identity is not configured",
+                )
+            if command.target_id is None:
+                raise MishkanError(ErrorCode.OUTPUT_CONTRACT, "worker command target is absent")
+            worker_target_id = UUID(command.target_id)
+
+            def apply_worker_mutation(
+                session: Session, _next_revision: int
+            ) -> tuple[dict[str, object], dict[str, object]]:
+                if command.command_type == "worker.enrollment.create":
+                    expires_at = utc_now() + timedelta(
+                        seconds=distributed_config.enrollment_ttl_seconds
+                    )
+                    worker_repository.create_enrollment_token_in_session(
+                        session,
+                        token_id=worker_target_id,
+                        token_digest=str(command.payload["token_digest"]),
+                        actor_id=command.actor_id,
+                        expires_at=expires_at,
+                    )
+                    payload: dict[str, object] = {
+                        "token_id": str(worker_target_id),
+                        "expires_at": expires_at.isoformat(),
+                    }
+                    return payload, {**payload, **_authorization_projection(authorized)}
+                if command.command_type == "worker.enrollment.revoke":
+                    changed = worker_repository.revoke_enrollment_token_in_session(
+                        session,
+                        worker_target_id,
+                    )
+                    payload = {"token_id": str(worker_target_id), "changed": changed}
+                    return payload, {**payload, **_authorization_projection(authorized)}
+                if command.command_type == "worker.revoke":
+                    if command.expected_revision is None:
+                        raise MishkanError(
+                            ErrorCode.OUTPUT_CONTRACT,
+                            "worker revocation requires an expected revision",
+                        )
+                    identity = worker_repository.revoke_worker_in_session(
+                        session,
+                        worker_target_id,
+                        expected_revision=command.expected_revision,
+                    )
+                    payload = identity.model_dump(mode="json")
+                    return payload, {
+                        "worker_id": str(identity.id),
+                        "state": identity.state.value,
+                        "revision": identity.revision,
+                        **_authorization_projection(authorized),
+                    }
+                raise MishkanError(ErrorCode.OUTPUT_CONTRACT, "unknown worker command")
+
+            event_types = {
+                "worker.enrollment.create": "worker.enrollment_token_created",
+                "worker.enrollment.revoke": "worker.enrollment_token_revoked",
+                "worker.revoke": "worker.revoked",
+            }
+            async with command_lock:
+                try:
+                    return repository.accept_with_mutation(
+                        command,
+                        target_id=command.target_id,
+                        event_type=event_types[command.command_type],
+                        mutation=apply_worker_mutation,
+                        source="mishkand.worker_identity",
+                    )
+                except MishkanError as error:
+                    return repository.refuse(
+                        command,
+                        target_id=command.target_id,
+                        error=error,
+                        event_payload={
+                            "command_type": command.command_type,
+                            **_authorization_projection(authorized),
+                            "error_code": error.envelope.code,
+                        },
+                    )
         resolved_credentials = _resolve_command_credentials(
             authorized,
             credential_resolver,
@@ -1422,6 +1521,84 @@ def create_app(
     async def health() -> dict[str, str]:
         status = SchemaManager(database_runtime).status()
         return {"status": "ready", "schema": status.head_revision}
+
+    def authenticated_worker(request: Request) -> tuple[WorkerIdentity, str]:
+        if worker_enrollment is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker identity is not configured",
+            )
+        der = peer_certificate_der(request.scope)
+        certificate = x509.load_der_x509_certificate(der)
+        pem = certificate.public_bytes(serialization.Encoding.PEM).decode()
+        return worker_enrollment.authenticate_peer(pem)
+
+    @app.post("/v1/workers/enroll", response_model=WorkerCertificateBundle)
+    async def worker_enroll(request: WorkerEnrollmentRequest) -> WorkerCertificateBundle:
+        if worker_enrollment is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker enrollment is not configured",
+            )
+        return await _thread_call(worker_enrollment.enroll, request)
+
+    @app.get("/v1/workers/me", response_model=WorkerIdentity)
+    async def worker_me(request: Request) -> WorkerIdentity:
+        identity, _serial = await _thread_call(authenticated_worker, request)
+        return identity
+
+    @app.post(
+        "/v1/workers/certificate/rotate",
+        response_model=WorkerCertificateBundle,
+    )
+    async def worker_certificate_rotate(
+        rotation: WorkerCertificateRotationRequest,
+        request: Request,
+    ) -> WorkerCertificateBundle:
+        if worker_enrollment is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker identity is not configured",
+            )
+        identity, serial = await _thread_call(authenticated_worker, request)
+        return await _thread_call(
+            worker_enrollment.rotate,
+            WorkerRotationRequest(
+                worker_id=identity.id,
+                current_certificate_serial=serial,
+                certificate_signing_request_pem=rotation.certificate_signing_request_pem,
+            ),
+        )
+
+    @app.get("/v1/workers", response_model=None)
+    async def worker_list(
+        _principal: TokenRecord = authenticated,
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=10_000)] = 100,
+    ) -> tuple[dict[str, object], ...]:
+        if worker_repository is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker identity is not configured",
+            )
+        identities = await _thread_call(
+            worker_repository.identities,
+            offset=offset,
+            limit=limit,
+        )
+        return tuple(identity.model_dump(mode="json") for identity in identities)
+
+    @app.get("/v1/workers/{worker_id}", response_model=WorkerIdentity)
+    async def worker_get(
+        worker_id: UUID,
+        _principal: TokenRecord = authenticated,
+    ) -> WorkerIdentity:
+        if worker_repository is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker identity is not configured",
+            )
+        return await _thread_call(worker_repository.identity, worker_id)
 
     @app.post("/v1/commands", response_model=CommandResult)
     async def command(
