@@ -11,6 +11,7 @@ import pytest
 from mishkan.client import Mishkan
 from mishkan.daemon.auth import TokenFile
 from mishkan.events import EventEnvelope, EventPage
+from mishkan.scheduling import DateTriggerSpec, ScheduleCreateRequest, ScheduleMissionRequest
 
 
 def _event(cursor: int) -> EventEnvelope:
@@ -141,6 +142,65 @@ def test_sdk_emits_versioned_prospective_and_repository_establishment_commands(
         "discovery_revision": "a" * 64,
         "evidence_references": ["artifact:establishment"],
     }
+
+
+def test_schedule_sdk_emits_the_governed_versioned_command(tmp_path: Path) -> None:
+    token_file = tmp_path / "token.json"
+    TokenFile(token_file).create("PM")
+    request = ScheduleCreateRequest(
+        mission=ScheduleMissionRequest(project_id="project-a", objective="Run verified checks"),
+        trigger=DateTriggerSpec(run_at=datetime(2099, 1, 1, tzinfo=UTC)),
+    )
+    commands: list[dict[str, object]] = []
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        command = json.loads(http_request.content)
+        commands.append(command)
+        now = datetime.now(UTC).isoformat()
+        schedule = {
+            "schema_version": "1.0",
+            "schedule_id": str(request.schedule_id),
+            "mission": request.mission.model_dump(mode="json"),
+            "trigger": request.trigger.model_dump(mode="json"),
+            "state": "active",
+            "overlap_key": request.mission.target_key,
+            "overlap_mode": "block",
+            "created_by": "PM",
+            "preauthorization_policy_fingerprint": "a" * 64,
+            "next_fire_at": request.trigger.run_at.isoformat(),
+            "last_evaluated_at": None,
+            "revision": 1,
+            "created_at": now,
+            "updated_at": now,
+        }
+        return httpx.Response(
+            200,
+            json={
+                "schema_version": "1.0",
+                "command_id": command["command_id"],
+                "status": "accepted",
+                "target_type": "schedule",
+                "target_id": str(request.schedule_id),
+                "revision": 1,
+                "event_cursor": 1,
+                "payload": {"schedule": schedule, "occurrence": None, "coalesced": []},
+                "error": None,
+                "completed_at": now,
+            },
+        )
+
+    with Mishkan("http://mishkand.test", token_file=token_file) as client:
+        client._client.close()
+        client._client = httpx.Client(
+            base_url="http://mishkand.test",
+            transport=httpx.MockTransport(handler),
+        )
+        created = client.schedules.create(request)
+
+    assert created.schedule_id == request.schedule_id
+    assert commands[0]["command_type"] == "schedule.create"
+    assert commands[0]["expected_revision"] == 0
+    assert commands[0]["payload"] == {"request": request.model_dump(mode="json")}
 
 
 def test_sdk_bounded_query_surfaces_use_authenticated_versioned_routes(tmp_path: Path) -> None:

@@ -125,6 +125,14 @@ from mishkan.organization import (
     ProfessionalPromotionDisposition,
     ProfessionalPromotionRequest,
 )
+from mishkan.scheduling import (
+    OccurrenceSource,
+    ScheduleCreateRequest,
+    ScheduleFireRequest,
+    ScheduleOccurrence,
+    ScheduleRecord,
+    ScheduleState,
+)
 from mishkan.skills.models import (
     SkillCurationProposal,
     SkillInvocationEvidence,
@@ -182,6 +190,10 @@ class Mishkan:
     @property
     def structure(self) -> StructureClient:
         return StructureClient(self)
+
+    @property
+    def schedules(self) -> ScheduleClient:
+        return ScheduleClient(self)
 
     def command(self, command: ApplicationCommand) -> CommandResult:
         response = self._client.post(
@@ -1687,6 +1699,124 @@ class Mishkan:
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._token_file.read().token}"}
+
+
+class ScheduleClient:
+    """Thin schedule client; mishkand remains the sole timing and state authority."""
+
+    def __init__(self, client: Mishkan) -> None:
+        self._client = client
+
+    def create(self, request: ScheduleCreateRequest) -> ScheduleRecord:
+        result = self._client.command(
+            ApplicationCommand(
+                command_type="schedule.create",
+                actor_id=self._client.principal_id,
+                target_type="schedule",
+                target_id=str(request.schedule_id),
+                expected_revision=0,
+                payload={"request": request.model_dump(mode="json")},
+            )
+        )
+        return ScheduleRecord.model_validate(result.payload["schedule"])
+
+    def pause(self, schedule_id: UUID, *, expected_revision: int) -> ScheduleRecord:
+        return self._control("schedule.pause", schedule_id, expected_revision)
+
+    def resume(self, schedule_id: UUID, *, expected_revision: int) -> ScheduleRecord:
+        return self._control("schedule.resume", schedule_id, expected_revision)
+
+    def remove(self, schedule_id: UUID, *, expected_revision: int) -> ScheduleRecord:
+        return self._control("schedule.remove", schedule_id, expected_revision)
+
+    def run_now(self, schedule_id: UUID, *, expected_revision: int) -> ScheduleOccurrence:
+        result = self._client.command(
+            ApplicationCommand(
+                command_type="schedule.run_now",
+                actor_id=self._client.principal_id,
+                target_type="schedule",
+                target_id=str(schedule_id),
+                expected_revision=expected_revision,
+                payload={},
+            )
+        )
+        return ScheduleOccurrence.model_validate(result.payload["occurrence"])
+
+    def trigger(self, schedule_id: UUID, *, expected_revision: int) -> ScheduleOccurrence:
+        request = ScheduleFireRequest(source=OccurrenceSource.EXTERNAL)
+        result = self._client.command(
+            ApplicationCommand(
+                command_type="schedule.trigger",
+                actor_id=self._client.principal_id,
+                target_type="schedule",
+                target_id=str(schedule_id),
+                expected_revision=expected_revision,
+                payload={"request": request.model_dump(mode="json")},
+            )
+        )
+        raw = result.payload.get("occurrence")
+        if not isinstance(raw, dict):
+            raise ValueError("schedule trigger did not return an occurrence")
+        return ScheduleOccurrence.model_validate(raw)
+
+    def list(
+        self,
+        *,
+        state: ScheduleState | None = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> tuple[ScheduleRecord, ...]:
+        params: dict[str, str | int] = {"offset": offset, "limit": limit}
+        if state is not None:
+            params["state"] = state.value
+        response = self._client._client.get(
+            "/v1/schedules",
+            headers=self._client._headers(),
+            params=params,
+        )
+        response.raise_for_status()
+        return tuple(ScheduleRecord.model_validate(item) for item in response.json())
+
+    def get(self, schedule_id: UUID) -> ScheduleRecord:
+        response = self._client._client.get(
+            f"/v1/schedules/{schedule_id}",
+            headers=self._client._headers(),
+        )
+        response.raise_for_status()
+        return ScheduleRecord.model_validate(response.json())
+
+    def history(
+        self,
+        schedule_id: UUID,
+        *,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> tuple[ScheduleOccurrence, ...]:
+        response = self._client._client.get(
+            f"/v1/schedules/{schedule_id}/history",
+            headers=self._client._headers(),
+            params={"offset": offset, "limit": limit},
+        )
+        response.raise_for_status()
+        return tuple(ScheduleOccurrence.model_validate(item) for item in response.json())
+
+    def _control(
+        self,
+        command_type: str,
+        schedule_id: UUID,
+        expected_revision: int,
+    ) -> ScheduleRecord:
+        result = self._client.command(
+            ApplicationCommand(
+                command_type=command_type,
+                actor_id=self._client.principal_id,
+                target_type="schedule",
+                target_id=str(schedule_id),
+                expected_revision=expected_revision,
+                payload={},
+            )
+        )
+        return ScheduleRecord.model_validate(result.payload["schedule"])
 
 
 class KnowledgeClient:
