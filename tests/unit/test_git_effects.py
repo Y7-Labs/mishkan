@@ -4,6 +4,8 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from mishkan.artifacts.service import DurableArtifactService
 from mishkan.edits.git import GitEffectMode, GitEffectRequest, GovernedGitService
 from mishkan.persistence import SchemaManager
@@ -35,7 +37,9 @@ def _policy(effect: str, capability: str) -> EffectivePolicy:
     )
 
 
-def test_stage_and_commit_are_distinct_executable_policy_effects(tmp_path: Path) -> None:
+def test_stage_and_commit_are_distinct_executable_policy_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repository = tmp_path / "repo"
     repository.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
@@ -49,11 +53,26 @@ def test_stage_and_commit_are_distinct_executable_policy_effects(tmp_path: Path)
         max_chunk_bytes=1024,
     )
     service = GovernedGitService(artifacts)
+    observed_timeouts: list[int] = []
+    run = GovernedGitService._run
+
+    def observe_timeout(
+        workspace: Path,
+        arguments: list[str],
+        *,
+        timeout: int,
+        environment: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        observed_timeouts.append(timeout)
+        return run(workspace, arguments, timeout=timeout, environment=environment)
+
+    monkeypatch.setattr(GovernedGitService, "_run", staticmethod(observe_timeout))
 
     stage = GitEffectRequest(
         mode=GitEffectMode.STAGE,
         workspace=repository,
         paths=("app.txt",),
+        timeout_seconds=37,
     )
     stage_auth = service.authorization_request(
         stage,
@@ -68,6 +87,8 @@ def test_stage_and_commit_are_distinct_executable_policy_effects(tmp_path: Path)
         policy=_policy("git.stage", "git.stage"),
     )
     assert staged.settlement is EffectSettlement.COMPLETED
+    assert observed_timeouts and set(observed_timeouts) == {37}
+    observed_timeouts.clear()
 
     commit = GitEffectRequest(
         mode=GitEffectMode.COMMIT,
@@ -76,6 +97,7 @@ def test_stage_and_commit_are_distinct_executable_policy_effects(tmp_path: Path)
         author_email="axel.studiesmail@gmail.com",
         message="feat: initial",
         paths=("app.txt",),
+        timeout_seconds=43,
     )
     commit_auth = service.authorization_request(
         commit,
@@ -94,6 +116,7 @@ def test_stage_and_commit_are_distinct_executable_policy_effects(tmp_path: Path)
     assert committed.repository_root == str(repository)
     assert committed.current_branch in {"main", "master"}
     assert b"app.txt" in artifacts.read_bytes(committed.diff_reference)
+    assert observed_timeouts and set(observed_timeouts) == {43}
 
 
 def test_push_force_with_lease_and_force_push_verify_remote_target(tmp_path: Path) -> None:

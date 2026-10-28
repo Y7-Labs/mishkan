@@ -170,6 +170,13 @@ from mishkan.repository.models import (
     RepositoryEstablishment,
 )
 from mishkan.runtime import TaskReviewRejection
+from mishkan.scheduling import (
+    ScheduleCreateRequest,
+    ScheduleFireRequest,
+    ScheduleMissionRequest,
+    ScheduleOccurrence,
+    ScheduleRecord,
+)
 from mishkan.skills.models import (
     SkillBundleDefinition,
     SkillBundleResolution,
@@ -353,6 +360,11 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "professional-promotion-request-v1.schema.json": ProfessionalPromotionRequest,
     "langsmith-feedback-import-request-v1.schema.json": LangSmithFeedbackImportRequest,
     "run-initialization-request-v1.schema.json": RunInitializationRequest,
+    "schedule-create-request-v1.schema.json": ScheduleCreateRequest,
+    "schedule-fire-request-v1.schema.json": ScheduleFireRequest,
+    "schedule-mission-request-v1.schema.json": ScheduleMissionRequest,
+    "schedule-occurrence-v1.schema.json": ScheduleOccurrence,
+    "schedule-record-v1.schema.json": ScheduleRecord,
     "skill-bundle-definition-v1.schema.json": SkillBundleDefinition,
     "skill-bundle-resolution-v1.schema.json": SkillBundleResolution,
     "skill-curation-proposal-v1.schema.json": SkillCurationProposal,

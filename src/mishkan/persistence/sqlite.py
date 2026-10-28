@@ -956,6 +956,47 @@ class KnowledgePromotionRow(Base):
     decided_at: Mapped[str | None] = mapped_column(String(40))
 
 
+class ScheduleRow(Base):
+    __tablename__ = "schedules"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    trigger_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    timezone: Mapped[str | None] = mapped_column(String(128))
+    overlap_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    overlap_mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    next_fire_at: Mapped[str | None] = mapped_column(String(40))
+    last_evaluated_at: Mapped[str | None] = mapped_column(String(40))
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(256), nullable=False)
+    policy_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class ScheduleOccurrenceRow(Base):
+    __tablename__ = "schedule_occurrences"
+    __table_args__ = (UniqueConstraint("schedule_id", "occurrence_key"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    occurrence_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    schedule_id: Mapped[str] = mapped_column(ForeignKey("schedules.id"), nullable=False)
+    schedule_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    scheduled_for: Mapped[str] = mapped_column(String(40), nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    run_command_id: Mapped[str | None] = mapped_column(String(36))
+    run_id: Mapped[str | None] = mapped_column(ForeignKey("runs.id"))
+    next_attempt_at: Mapped[str | None] = mapped_column(String(40))
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
 @dataclass(frozen=True, slots=True)
 class RunSnapshot:
     run_id: str

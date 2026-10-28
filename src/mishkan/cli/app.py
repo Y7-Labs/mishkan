@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, TypeVar
+from uuid import UUID
 
 import typer
 import yaml
@@ -46,6 +47,7 @@ advisory_app = typer.Typer(help="Inspect evidence-based contextual recommendatio
 knowledge_app = typer.Typer(help="Query and govern attributed knowledge through mishkand.")
 memory_app = typer.Typer(help="Recall and capture accepted episodic memory through mishkand.")
 code_graph_app = typer.Typer(help="Query and refresh structural repository evidence.")
+schedule_app = typer.Typer(help="Create and govern persistent headless schedules.")
 app.add_typer(config_app, name="config")
 app.add_typer(schema_app, name="schema")
 app.add_typer(daemon_app, name="daemon")
@@ -71,6 +73,7 @@ app.add_typer(advisory_app, name="advisory")
 app.add_typer(knowledge_app, name="knowledge")
 app.add_typer(memory_app, name="memory")
 app.add_typer(code_graph_app, name="code-graph")
+app.add_typer(schedule_app, name="schedule")
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -84,6 +87,161 @@ def _read_contract(path: Path, model: type[ModelT], option: str) -> ModelT:
 
 def _dump_models(values: tuple[BaseModel, ...]) -> list[dict[str, Any]]:
     return [value.model_dump(mode="json") for value in values]
+
+
+@schedule_app.command("create")
+def create_schedule(
+    ctx: typer.Context,
+    request_file: Annotated[Path, typer.Option("--request")],
+) -> None:
+    """Create a persistent schedule from one strict JSON request."""
+    from mishkan.scheduling import ScheduleCreateRequest
+
+    request = _read_contract(request_file, ScheduleCreateRequest, "--request")
+    with _daemon_client(ctx) as client:
+        record = client.schedules.create(request)
+    _emit(record.model_dump(mode="json"), as_json=_state(ctx).json_output)
+
+
+@schedule_app.command("list")
+def list_schedules(
+    ctx: typer.Context,
+    state: Annotated[str | None, typer.Option()] = None,
+    offset: Annotated[int, typer.Option(min=0)] = 0,
+    limit: Annotated[int, typer.Option(min=1, max=10_000)] = 100,
+) -> None:
+    """List bounded durable schedule projections."""
+    from mishkan.scheduling import ScheduleState
+
+    parsed_state = ScheduleState(state) if state is not None else None
+    with _daemon_client(ctx) as client:
+        records = client.schedules.list(state=parsed_state, offset=offset, limit=limit)
+    _emit(_dump_models(records), as_json=_state(ctx).json_output)
+
+
+@schedule_app.command("show")
+def show_schedule(ctx: typer.Context, schedule_id: UUID) -> None:
+    """Inspect one exact schedule and its current revision."""
+    with _daemon_client(ctx) as client:
+        record = client.schedules.get(schedule_id)
+    _emit(record.model_dump(mode="json"), as_json=_state(ctx).json_output)
+
+
+def _schedule_revision(client: Any, schedule_id: UUID, expected_revision: int | None) -> int:
+    return (
+        expected_revision
+        if expected_revision is not None
+        else client.schedules.get(schedule_id).revision
+    )
+
+
+def _control_schedule(
+    ctx: typer.Context,
+    schedule_id: UUID,
+    action: str,
+    expected_revision: int | None,
+) -> None:
+    with _daemon_client(ctx) as client:
+        revision = _schedule_revision(client, schedule_id, expected_revision)
+        record = getattr(client.schedules, action)(
+            schedule_id,
+            expected_revision=revision,
+        )
+    _emit(record.model_dump(mode="json"), as_json=_state(ctx).json_output)
+
+
+@schedule_app.command("pause")
+def pause_schedule(
+    ctx: typer.Context,
+    schedule_id: UUID,
+    expected_revision: Annotated[int | None, typer.Option(min=0)] = None,
+) -> None:
+    """Pause future occurrences using optimistic concurrency."""
+    _control_schedule(ctx, schedule_id, "pause", expected_revision)
+
+
+@schedule_app.command("resume")
+def resume_schedule(
+    ctx: typer.Context,
+    schedule_id: UUID,
+    expected_revision: Annotated[int | None, typer.Option(min=0)] = None,
+) -> None:
+    """Resume a paused schedule using optimistic concurrency."""
+    _control_schedule(ctx, schedule_id, "resume", expected_revision)
+
+
+@schedule_app.command("remove")
+def remove_schedule(
+    ctx: typer.Context,
+    schedule_id: UUID,
+    expected_revision: Annotated[int | None, typer.Option(min=0)] = None,
+) -> None:
+    """Tombstone a schedule without deleting its history."""
+    _control_schedule(ctx, schedule_id, "remove", expected_revision)
+
+
+@schedule_app.command("run-now")
+def run_schedule_now(
+    ctx: typer.Context,
+    schedule_id: UUID,
+    expected_revision: Annotated[int | None, typer.Option(min=0)] = None,
+) -> None:
+    """Create one manual occurrence through the same governed run path."""
+    with _daemon_client(ctx) as client:
+        revision = _schedule_revision(client, schedule_id, expected_revision)
+        occurrence = client.schedules.run_now(schedule_id, expected_revision=revision)
+    _emit(occurrence.model_dump(mode="json"), as_json=_state(ctx).json_output)
+
+
+@schedule_app.command("trigger")
+def trigger_schedule(
+    ctx: typer.Context,
+    schedule_id: UUID,
+    expected_revision: Annotated[int | None, typer.Option(min=0)] = None,
+) -> None:
+    """Submit an external wake-up; the daemon accepts only the next due occurrence."""
+    with _daemon_client(ctx) as client:
+        revision = _schedule_revision(client, schedule_id, expected_revision)
+        occurrence = client.schedules.trigger(schedule_id, expected_revision=revision)
+    _emit(occurrence.model_dump(mode="json"), as_json=_state(ctx).json_output)
+
+
+@schedule_app.command("history")
+def schedule_history(
+    ctx: typer.Context,
+    schedule_id: UUID,
+    offset: Annotated[int, typer.Option(min=0)] = 0,
+    limit: Annotated[int, typer.Option(min=1, max=10_000)] = 100,
+) -> None:
+    """List durable occurrence history and visible degraded settlements."""
+    with _daemon_client(ctx) as client:
+        records = client.schedules.history(schedule_id, offset=offset, limit=limit)
+    _emit(_dump_models(records), as_json=_state(ctx).json_output)
+
+
+@schedule_app.command("export")
+def export_schedule(
+    ctx: typer.Context,
+    schedule_id: UUID,
+    target: Annotated[str, typer.Option("--target")],
+    executable: Annotated[str, typer.Option()] = "mishkan",
+) -> None:
+    """Render cron, systemd, or launchd wake-ups for the same daemon trigger command."""
+    from mishkan.scheduling import ScheduleExportTarget, render_schedule_export
+
+    try:
+        export_target = ScheduleExportTarget(target)
+    except ValueError as exc:
+        raise typer.BadParameter("--target must be cron, systemd, or launchd") from exc
+    with _daemon_client(ctx) as client:
+        record = client.schedules.get(schedule_id)
+    rendered = render_schedule_export(record, export_target, executable=executable)
+    if _state(ctx).json_output:
+        _emit(
+            {"schedule_id": str(schedule_id), "target": target, "content": rendered}, as_json=True
+        )
+    else:
+        typer.echo(rendered, nl=False)
 
 
 @knowledge_app.command("query")

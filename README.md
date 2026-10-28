@@ -10,8 +10,8 @@ execution, preserves decisions and evidence, and returns independently reviewed 
 retain authority over consequential actions.
 
 > **Pre-release:** MISHKAN is under active development and currently installs from source. The
-> implemented product is a local, single-daemon system for Linux and macOS. Persistent scheduling,
-> distributed workers, and the operational TUI remain roadmap work.
+> implemented product is a local, single-daemon system for Linux and macOS. Distributed workers
+> and the operational TUI remain roadmap work.
 
 ## Organization model
 
@@ -112,6 +112,7 @@ CLI · Python SDK · HTTP/SSE · MCP bridge
 | Engineering environments | Evidence-based engine discovery, technical packs, immutable descriptor sets, governed environment attempts, and measured Docker/Compose/Dev Container/Podman adapters |
 | Observability | Bounded OpenTelemetry projection and optional non-authoritative LangSmith feedback import under public disclosure policy |
 | Attributed knowledge | Explicit literal, episodic, semantic, and structural queries; immutable evidence bundles and Context Packs; authenticated mem0, Cognee, and Graphify adapters; governed ingestion, memory capture, promotion, and visible degraded operation |
+| Persistent scheduling | Durable timezone-aware one-shot and five-field cron schedules, run-now, pause/resume/remove, bounded history, coalescing, misfire and retry policy, overlap control, restart recovery, and cron/systemd/launchd exports through the same governed trigger authority |
 
 The detailed implementation status and evidence are maintained in the
 [documentation index](docs/README.md), not duplicated here.
