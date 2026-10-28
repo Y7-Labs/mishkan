@@ -371,6 +371,90 @@ async def test_driver_marks_unprovable_interrupted_dispatch_uncertain(tmp_path: 
     assert settled.error_code == ErrorCode.RUN_INTERRUPTED
 
 
+@pytest.mark.anyio
+async def test_restart_reconciles_committed_pending_occurrence(tmp_path: Path) -> None:
+    import asyncio
+
+    repository = _repository(tmp_path)
+    request = _request()
+    schedule = repository.create(
+        request,
+        actor_id="operator",
+        policy_fingerprint="b" * 64,
+        next_fire_at=request.trigger.run_at,
+    )
+    occurrence = repository.create_occurrence(
+        schedule,
+        occurrence_key="manual:pending-before-crash",
+        source=OccurrenceSource.MANUAL,
+        scheduled_for=request.trigger.run_at,
+    )
+    dispatched = asyncio.Event()
+
+    async def execute(command: object, _principal_id: str) -> CommandResult:
+        from mishkan.application import ApplicationCommand
+
+        assert isinstance(command, ApplicationCommand)
+        dispatched.set()
+        error = MishkanError(
+            ErrorCode.OPTIONAL_DEPENDENCY,
+            "temporary dependency failure",
+            retryable=True,
+        )
+        return CommandResult(
+            command_id=command.command_id,
+            status=CommandStatus.REFUSED,
+            target_type="run",
+            error=error.envelope,
+        )
+
+    driver = ScheduleDriver(_scheduling_config(), repository, execute)
+    await driver.reconcile()
+    await asyncio.wait_for(dispatched.wait(), timeout=1)
+    for _ in range(100):
+        settled = repository.occurrence(occurrence.occurrence_id)
+        if settled.state is OccurrenceState.RETRY_WAITING:
+            break
+        await asyncio.sleep(0.01)
+    assert settled.state is OccurrenceState.RETRY_WAITING
+    assert settled.attempt_count == 1
+
+
+@pytest.mark.anyio
+async def test_overlap_blocks_second_dispatch_before_run_effect(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    request = _request()
+    schedule = repository.create(
+        request,
+        actor_id="operator",
+        policy_fingerprint="b" * 64,
+        next_fire_at=request.trigger.run_at,
+    )
+    first = repository.create_occurrence(
+        schedule,
+        occurrence_key="manual:first",
+        source=OccurrenceSource.MANUAL,
+        scheduled_for=request.trigger.run_at,
+    )
+    second = repository.create_occurrence(
+        schedule,
+        occurrence_key="manual:second",
+        source=OccurrenceSource.MANUAL,
+        scheduled_for=request.trigger.run_at + timedelta(seconds=1),
+    )
+    repository.claim_dispatch(first.occurrence_id, run_command_id=uuid4())
+
+    async def should_not_execute(_command: object, _principal_id: str) -> CommandResult:
+        raise AssertionError("overlap must be blocked before the run command")
+
+    driver = ScheduleDriver(_scheduling_config(), repository, should_not_execute)
+    await driver.dispatch(second.occurrence_id)
+
+    settled = repository.occurrence(second.occurrence_id)
+    assert settled.state is OccurrenceState.OVERLAP_BLOCKED
+    assert settled.attempt_count == 0
+
+
 def test_os_exports_invoke_the_same_daemon_trigger_surface(tmp_path: Path) -> None:
     repository = _repository(tmp_path)
     request = ScheduleCreateRequest(

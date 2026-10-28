@@ -306,6 +306,16 @@ class SQLiteScheduleRepository:
             ).all()
             return tuple(self._occurrence(row) for row in rows)
 
+    def pending_occurrences(self, *, limit: int) -> tuple[ScheduleOccurrence, ...]:
+        with Session(self._engine) as session:
+            rows = session.scalars(
+                select(ScheduleOccurrenceRow)
+                .where(ScheduleOccurrenceRow.state == OccurrenceState.PENDING.value)
+                .order_by(ScheduleOccurrenceRow.created_at, ScheduleOccurrenceRow.id)
+                .limit(limit)
+            ).all()
+            return tuple(self._occurrence(row) for row in rows)
+
     def claim_dispatch(
         self,
         occurrence_id: UUID,

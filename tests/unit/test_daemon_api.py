@@ -295,6 +295,80 @@ async def test_manual_schedule_occurrence_dispatches_through_governed_run_comman
 
 
 @pytest.mark.anyio
+async def test_repeated_trigger_command_accepts_only_one_occurrence_and_run(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "README.md").write_text("# Trigger replay fixture\n", encoding="utf-8")
+    config = _config(tmp_path)
+    paths = DaemonBootstrap().setup(config, principal_id="PM")
+    token = TokenFile(paths.token_file).read()
+    headers = {"Authorization": f"Bearer {token.token}"}
+    run_at = datetime(2099, 1, 1, tzinfo=UTC)
+    request = ScheduleCreateRequest(
+        mission=ScheduleMissionRequest(
+            project_id="project-a",
+            workspace_id="prospective:trigger-replay",
+            objective="Create one idempotent prospective run",
+            outcome_id="trigger-replay",
+        ),
+        trigger=DateTriggerSpec(run_at=run_at),
+    )
+    transport = httpx.ASGITransport(app=create_app(config))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        create = ApplicationCommand(
+            command_type="schedule.create",
+            actor_id=token.principal_id,
+            target_type="schedule",
+            target_id=str(request.schedule_id),
+            expected_revision=0,
+            payload={"request": request.model_dump(mode="json")},
+        )
+        assert (
+            await client.post(
+                "/v1/commands",
+                headers=headers,
+                json=create.model_dump(mode="json"),
+            )
+        ).status_code == 200
+        trigger = ApplicationCommand(
+            command_type="schedule.trigger",
+            actor_id=token.principal_id,
+            target_type="schedule",
+            target_id=str(request.schedule_id),
+            expected_revision=1,
+            payload={
+                "request": {
+                    "schema_version": "1.0",
+                    "source": "external",
+                    "observed_at": run_at.isoformat(),
+                }
+            },
+        )
+        first = await client.post(
+            "/v1/commands", headers=headers, json=trigger.model_dump(mode="json")
+        )
+        replay = await client.post(
+            "/v1/commands", headers=headers, json=trigger.model_dump(mode="json")
+        )
+        assert first.status_code == replay.status_code == 200
+        assert first.json() == replay.json()
+
+        history: list[dict[str, object]] = []
+        for _ in range(100):
+            history = (
+                await client.get(
+                    f"/v1/schedules/{request.schedule_id}/history",
+                    headers=headers,
+                )
+            ).json()
+            if history and history[0]["state"] == "accepted":
+                break
+            await asyncio.sleep(0.01)
+        assert len(history) == 1
+        assert history[0]["state"] == "accepted"
+
+
+@pytest.mark.anyio
 async def test_langsmith_feedback_enters_only_as_attributed_candidate_artifact(
     tmp_path: Path,
 ) -> None:

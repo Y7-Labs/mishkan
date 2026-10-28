@@ -97,6 +97,12 @@ class ScheduleDriver:
         )
         for occurrence in interrupted:
             await self._reconcile_occurrence(occurrence)
+        pending = await asyncio.to_thread(
+            self._repository.pending_occurrences,
+            limit=self._config.max_catch_up_occurrences,
+        )
+        for occurrence in pending:
+            self.enqueue(occurrence.occurrence_id)
         await self.tick()
 
     async def dispatch(self, occurrence_id: UUID) -> None:
@@ -285,4 +291,10 @@ class ScheduleDriver:
     def _spawn(self, awaitable: Coroutine[Any, Any, None]) -> None:
         task: asyncio.Task[None] = asyncio.create_task(awaitable)
         self._dispatch_tasks.add(task)
-        task.add_done_callback(self._dispatch_tasks.discard)
+
+        def settled(completed: asyncio.Task[None]) -> None:
+            self._dispatch_tasks.discard(completed)
+            if not completed.cancelled():
+                completed.exception()
+
+        task.add_done_callback(settled)
