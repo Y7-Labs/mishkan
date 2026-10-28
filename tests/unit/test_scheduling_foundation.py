@@ -455,6 +455,157 @@ async def test_overlap_blocks_second_dispatch_before_run_effect(tmp_path: Path) 
     assert settled.attempt_count == 0
 
 
+@pytest.mark.anyio
+async def test_driver_tick_submits_due_internal_trigger_without_direct_effect(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path)
+    request = _request()
+    schedule = repository.create(
+        request,
+        actor_id="operator",
+        policy_fingerprint="c" * 64,
+        next_fire_at=request.trigger.run_at,
+    )
+    observed = []
+
+    async def execute(command: object, principal_id: str) -> CommandResult:
+        from mishkan.application import ApplicationCommand
+
+        assert isinstance(command, ApplicationCommand)
+        observed.append(command)
+        return CommandResult(
+            command_id=command.command_id,
+            status=CommandStatus.REFUSED,
+            target_type="schedule",
+            target_id=str(schedule.schedule_id),
+            error=MishkanError(ErrorCode.AUTHORITY_NOT_GRANTED, "refused").envelope,
+        )
+
+    driver = ScheduleDriver(_scheduling_config(), repository, execute)
+    await driver.tick(request.trigger.run_at)
+
+    assert len(observed) == 1
+    assert observed[0].command_type == "schedule.trigger"
+    assert observed[0].expected_revision == schedule.revision
+    assert repository.occurrences(schedule_id=schedule.schedule_id) == ()
+
+
+@pytest.mark.anyio
+async def test_driver_lifecycle_starts_and_stops_daemon_local_wakeup(tmp_path: Path) -> None:
+    import asyncio
+
+    repository = _repository(tmp_path)
+
+    async def execute(_command: object, _principal_id: str) -> CommandResult:
+        raise AssertionError("empty scheduling authority must not dispatch a command")
+
+    driver = ScheduleDriver(_scheduling_config(), repository, execute)
+    driver.start()
+    await asyncio.sleep(0.02)
+    await driver.stop()
+
+
+@pytest.mark.anyio
+async def test_accepted_run_without_identity_becomes_uncertain(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    request = _request()
+    schedule = repository.create(
+        request,
+        actor_id="operator",
+        policy_fingerprint="d" * 64,
+        next_fire_at=request.trigger.run_at,
+    )
+    occurrence = repository.create_occurrence(
+        schedule,
+        occurrence_key="manual:missing-run-id",
+        source=OccurrenceSource.MANUAL,
+        scheduled_for=request.trigger.run_at,
+    )
+
+    async def execute(command: object, _principal_id: str) -> CommandResult:
+        from mishkan.application import ApplicationCommand
+
+        assert isinstance(command, ApplicationCommand)
+        return CommandResult(
+            command_id=command.command_id,
+            status=CommandStatus.ACCEPTED,
+            target_type="run",
+            payload={},
+        )
+
+    driver = ScheduleDriver(_scheduling_config(), repository, execute)
+    await driver.dispatch(occurrence.occurrence_id)
+
+    settled = repository.occurrence(occurrence.occurrence_id)
+    assert settled.state is OccurrenceState.UNCERTAIN
+    assert settled.error_code == ErrorCode.OUTPUT_CONTRACT
+
+
+@pytest.mark.anyio
+async def test_dispatch_exception_reconciles_without_blind_replay(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    request = _request()
+    schedule = repository.create(
+        request,
+        actor_id="operator",
+        policy_fingerprint="e" * 64,
+        next_fire_at=request.trigger.run_at,
+    )
+    occurrence = repository.create_occurrence(
+        schedule,
+        occurrence_key="manual:transport-loss",
+        source=OccurrenceSource.MANUAL,
+        scheduled_for=request.trigger.run_at,
+    )
+
+    async def execute(_command: object, _principal_id: str) -> CommandResult:
+        raise RuntimeError("simulated lost response")
+
+    driver = ScheduleDriver(_scheduling_config(), repository, execute)
+    await driver.dispatch(occurrence.occurrence_id)
+
+    settled = repository.occurrence(occurrence.occurrence_id)
+    assert settled.state is OccurrenceState.UNCERTAIN
+    assert settled.error_code == ErrorCode.RUN_INTERRUPTED
+
+
+@pytest.mark.anyio
+async def test_non_retryable_run_refusal_is_terminal(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    request = _request()
+    schedule = repository.create(
+        request,
+        actor_id="operator",
+        policy_fingerprint="f" * 64,
+        next_fire_at=request.trigger.run_at,
+    )
+    occurrence = repository.create_occurrence(
+        schedule,
+        occurrence_key="manual:terminal-refusal",
+        source=OccurrenceSource.MANUAL,
+        scheduled_for=request.trigger.run_at,
+    )
+
+    async def execute(command: object, _principal_id: str) -> CommandResult:
+        from mishkan.application import ApplicationCommand
+
+        assert isinstance(command, ApplicationCommand)
+        return CommandResult(
+            command_id=command.command_id,
+            status=CommandStatus.REFUSED,
+            target_type="run",
+            error=MishkanError(ErrorCode.AUTHORITY_NOT_GRANTED, "not allowed").envelope,
+        )
+
+    driver = ScheduleDriver(_scheduling_config(), repository, execute)
+    await driver.dispatch(occurrence.occurrence_id)
+
+    settled = repository.occurrence(occurrence.occurrence_id)
+    assert settled.state is OccurrenceState.FAILED
+    assert settled.error_code == ErrorCode.AUTHORITY_NOT_GRANTED
+
+
 def test_os_exports_invoke_the_same_daemon_trigger_surface(tmp_path: Path) -> None:
     repository = _repository(tmp_path)
     request = ScheduleCreateRequest(
