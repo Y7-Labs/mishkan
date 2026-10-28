@@ -1,6 +1,6 @@
 schema_version: "1.0"
 source_id: bundled.local
-revision: "30"
+revision: "31"
 adoption_authority: MISHKAN release
 priority: 0
 rules:
@@ -136,6 +136,12 @@ rules:
         - run.repository.establish
         - run.cancel
         - run.recover
+        - schedule.create
+        - schedule.pause
+        - schedule.resume
+        - schedule.remove
+        - schedule.run_now
+        - schedule.trigger
         - artifact.upload.open
         - artifact.upload.chunk
         - artifact.upload.commit
@@ -226,6 +232,8 @@ rules:
         - application.run.initialize
         - application.run.context
         - application.run.control
+        - application.schedule.manage
+        - application.schedule.trigger
         - application.artifact.upload
         - application.artifact.reference
         - application.artifact.collection

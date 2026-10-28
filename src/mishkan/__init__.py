@@ -1,6 +1,6 @@
 """MISHKAN public package."""
 
-from mishkan.client import KnowledgeClient, MemoryClient, Mishkan, StructureClient
+from mishkan.client import KnowledgeClient, MemoryClient, Mishkan, ScheduleClient, StructureClient
 from mishkan.domain.errors import ErrorCode, ErrorEnvelope, MishkanError
 
 __all__ = [
@@ -10,6 +10,7 @@ __all__ = [
     "MemoryClient",
     "Mishkan",
     "MishkanError",
+    "ScheduleClient",
     "StructureClient",
     "__version__",
 ]

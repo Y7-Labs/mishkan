@@ -1,0 +1,30 @@
+{
+  "additionalProperties": false,
+  "description": "Observed wake-up from the daemon timer or an external OS scheduler.",
+  "properties": {
+    "observed_at": {
+      "format": "date-time",
+      "title": "Observed At",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source": {
+      "enum": [
+        "internal",
+        "external"
+      ],
+      "title": "Source",
+      "type": "string"
+    }
+  },
+  "required": [
+    "source"
+  ],
+  "title": "ScheduleFireRequest",
+  "type": "object"
+}

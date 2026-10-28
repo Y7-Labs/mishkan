@@ -1,4 +1,4 @@
-schema_version: "1.6"
+schema_version: "1.7"
 mode: hybrid
 engineering_profile: package://mishkan.resources.environment/default.yaml
 engineering_pack_sources:
@@ -394,3 +394,14 @@ skills:
   miss_proposal_threshold: 3
   stale_after_days: 180
   learning_max_source_bytes: 67108864
+scheduling:
+  enabled: true
+  poll_seconds: 1.0
+  misfire_grace_seconds: 600
+  coalesce: true
+  max_catch_up_occurrences: 100
+  max_attempts: 3
+  retry_initial_seconds: 5.0
+  retry_multiplier: 2.0
+  retry_max_seconds: 300.0
+  history_page_limit: 1000

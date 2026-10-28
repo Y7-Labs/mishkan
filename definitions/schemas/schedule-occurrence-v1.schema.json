@@ -1,0 +1,164 @@
+{
+  "$defs": {
+    "OccurrenceSource": {
+      "enum": [
+        "internal",
+        "manual",
+        "external"
+      ],
+      "title": "OccurrenceSource",
+      "type": "string"
+    },
+    "OccurrenceState": {
+      "enum": [
+        "pending",
+        "dispatching",
+        "retry_waiting",
+        "accepted",
+        "misfired",
+        "coalesced",
+        "overlap_blocked",
+        "failed",
+        "cancelled",
+        "uncertain"
+      ],
+      "title": "OccurrenceState",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "attempt_count": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Attempt Count",
+      "type": "integer"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "error_code": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Error Code"
+    },
+    "error_message": {
+      "anyOf": [
+        {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Error Message"
+    },
+    "next_attempt_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Next Attempt At"
+    },
+    "occurrence_id": {
+      "format": "uuid",
+      "title": "Occurrence Id",
+      "type": "string"
+    },
+    "occurrence_key": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Occurrence Key",
+      "type": "string"
+    },
+    "run_command_id": {
+      "anyOf": [
+        {
+          "format": "uuid",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Run Command Id"
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Run Id"
+    },
+    "schedule_id": {
+      "format": "uuid",
+      "title": "Schedule Id",
+      "type": "string"
+    },
+    "schedule_revision": {
+      "minimum": 1,
+      "title": "Schedule Revision",
+      "type": "integer"
+    },
+    "scheduled_for": {
+      "format": "date-time",
+      "title": "Scheduled For",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source": {
+      "$ref": "#/$defs/OccurrenceSource"
+    },
+    "state": {
+      "$ref": "#/$defs/OccurrenceState"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "occurrence_key",
+    "schedule_id",
+    "schedule_revision",
+    "source",
+    "state",
+    "scheduled_for"
+  ],
+  "title": "ScheduleOccurrence",
+  "type": "object"
+}

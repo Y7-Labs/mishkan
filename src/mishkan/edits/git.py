@@ -153,7 +153,11 @@ class GovernedGitService:
             raise MishkanError(ErrorCode.AUTHORITY_NOT_GRANTED, "Git effect is not authorized")
         workspace = request.workspace.resolve(strict=True)
         repository_root = self._required_value(
-            self._run(workspace, ["rev-parse", "--show-toplevel"], timeout=10),
+            self._run(
+                workspace,
+                ["rev-parse", "--show-toplevel"],
+                timeout=request.timeout_seconds,
+            ),
             "Git repository root could not be observed",
         )
         if Path(repository_root).resolve() != workspace:
@@ -162,12 +166,24 @@ class GovernedGitService:
                 "Git effect workspace is not the exact repository root",
             )
         git_directory = self._required_value(
-            self._run(workspace, ["rev-parse", "--absolute-git-dir"], timeout=10),
+            self._run(
+                workspace,
+                ["rev-parse", "--absolute-git-dir"],
+                timeout=request.timeout_seconds,
+            ),
             "Git directory identity could not be observed",
         )
-        branch_result = self._run(workspace, ["branch", "--show-current"], timeout=10)
+        branch_result = self._run(
+            workspace,
+            ["branch", "--show-current"],
+            timeout=request.timeout_seconds,
+        )
         current_branch = branch_result.stdout.strip() or None
-        before = self._run(workspace, ["rev-parse", "HEAD"], timeout=10)
+        before = self._run(
+            workspace,
+            ["rev-parse", "HEAD"],
+            timeout=request.timeout_seconds,
+        )
         before_revision = before.stdout.strip() if before.returncode == 0 else None
         if request.expected_head is not None and request.expected_head != before_revision:
             raise MishkanError(ErrorCode.REVISION_MISMATCH, "Git HEAD differs from the exact base")
@@ -176,7 +192,11 @@ class GovernedGitService:
                 ErrorCode.REVISION_MISMATCH,
                 "Git branch differs from the authorized branch",
             )
-        before_status = self._run(workspace, ["status", "--porcelain=v1"], timeout=10).stdout
+        before_status = self._run(
+            workspace,
+            ["status", "--porcelain=v1"],
+            timeout=request.timeout_seconds,
+        ).stdout
         if request.require_clean_worktree and before_status:
             raise MishkanError(
                 ErrorCode.REVISION_MISMATCH,
@@ -187,7 +207,9 @@ class GovernedGitService:
                 sorted(
                     item
                     for item in self._run(
-                        workspace, ["diff", "--cached", "--name-only"], timeout=10
+                        workspace,
+                        ["diff", "--cached", "--name-only"],
+                        timeout=request.timeout_seconds,
                     ).stdout.splitlines()
                     if item
                 )
@@ -202,7 +224,11 @@ class GovernedGitService:
         remote_before: str | None = None
         if request.remote is not None:
             remote_url = self._required_value(
-                self._run(workspace, ["remote", "get-url", request.remote], timeout=10),
+                self._run(
+                    workspace,
+                    ["remote", "get-url", request.remote],
+                    timeout=request.timeout_seconds,
+                ),
                 "Git remote identity could not be observed",
             )
             if remote_url != request.expected_remote_url:
@@ -216,6 +242,7 @@ class GovernedGitService:
                 workspace,
                 request.expected_remote_url,
                 request.branch,
+                timeout=request.timeout_seconds,
                 credential_value=credential_value,
             )
         argv = self._argv(request, remote_target=request.expected_remote_url)
@@ -229,13 +256,18 @@ class GovernedGitService:
             if request.remote is not None
             else self._run(workspace, argv, timeout=request.timeout_seconds)
         )
-        after = self._run(workspace, ["rev-parse", "HEAD"], timeout=10)
+        after = self._run(
+            workspace,
+            ["rev-parse", "HEAD"],
+            timeout=request.timeout_seconds,
+        )
         after_revision = after.stdout.strip() if after.returncode == 0 else None
         remote_after = (
             self._remote_oid(
                 workspace,
                 request.expected_remote_url or "",
                 request.branch or "",
+                timeout=request.timeout_seconds,
                 credential_value=credential_value,
             )
             if request.remote is not None
@@ -245,8 +277,8 @@ class GovernedGitService:
         diff_arguments, names_arguments = self._evidence_arguments(
             request, before_revision, after_revision, remote_before
         )
-        diff = self._run(workspace, diff_arguments, timeout=30)
-        names = self._run(workspace, names_arguments, timeout=30)
+        diff = self._run(workspace, diff_arguments, timeout=request.timeout_seconds)
+        names = self._run(workspace, names_arguments, timeout=request.timeout_seconds)
         changed_paths = tuple(sorted(item for item in names.stdout.splitlines() if item))
         manifest = self._artifacts.put_bytes(
             diff.stdout.encode(),
@@ -312,12 +344,13 @@ class GovernedGitService:
         remote: str,
         branch: str,
         *,
+        timeout: int,
         credential_value: str | None,
     ) -> str | None:
         result = cls._run_remote(
             workspace,
             ["ls-remote", "--heads", remote, f"refs/heads/{branch}"],
-            timeout=30,
+            timeout=timeout,
             credential_value=credential_value,
         )
         if result.returncode != 0 or not result.stdout.strip():

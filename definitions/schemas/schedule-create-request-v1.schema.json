@@ -1,0 +1,239 @@
+{
+  "$defs": {
+    "CronTriggerSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "expression": {
+          "maxLength": 256,
+          "minLength": 9,
+          "title": "Expression",
+          "type": "string"
+        },
+        "kind": {
+          "const": "cron",
+          "default": "cron",
+          "title": "Kind",
+          "type": "string"
+        },
+        "timezone": {
+          "title": "Timezone",
+          "type": "string"
+        }
+      },
+      "required": [
+        "expression",
+        "timezone"
+      ],
+      "title": "CronTriggerSpec",
+      "type": "object"
+    },
+    "DateTriggerSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "date",
+          "default": "date",
+          "title": "Kind",
+          "type": "string"
+        },
+        "run_at": {
+          "format": "date-time",
+          "title": "Run At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_at"
+      ],
+      "title": "DateTriggerSpec",
+      "type": "object"
+    },
+    "MissionTemplateReference": {
+      "additionalProperties": false,
+      "description": "Exact immutable identity of optional mission guidance used by a plan.",
+      "properties": {
+        "catalogue_id": {
+          "pattern": "^[a-z][a-z0-9_.-]{1,127}$",
+          "title": "Catalogue Id",
+          "type": "string"
+        },
+        "catalogue_revision": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Catalogue Revision",
+          "type": "string"
+        },
+        "definition_fingerprint": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Definition Fingerprint",
+          "type": "string"
+        },
+        "provenance": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Provenance",
+          "type": "array"
+        },
+        "source": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Source",
+          "type": "string"
+        },
+        "template_id": {
+          "pattern": "^[a-z][a-z0-9_.-]{1,127}$",
+          "title": "Template Id",
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "template_id",
+        "version",
+        "source",
+        "provenance",
+        "catalogue_id",
+        "catalogue_revision",
+        "definition_fingerprint"
+      ],
+      "title": "MissionTemplateReference",
+      "type": "object"
+    },
+    "OverlapMode": {
+      "enum": [
+        "block",
+        "allow"
+      ],
+      "title": "OverlapMode",
+      "type": "string"
+    },
+    "ScheduleMissionRequest": {
+      "additionalProperties": false,
+      "description": "Free-form mission request; it is not a static workflow or outcome catalogue.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Inputs",
+          "type": "object"
+        },
+        "objective": {
+          "maxLength": 8192,
+          "minLength": 3,
+          "title": "Objective",
+          "type": "string"
+        },
+        "outcome_id": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Outcome Id"
+        },
+        "project_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Project Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "template_reference": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MissionTemplateReference"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "workspace_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workspace Id"
+        }
+      },
+      "required": [
+        "project_id",
+        "objective"
+      ],
+      "title": "ScheduleMissionRequest",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "mission": {
+      "$ref": "#/$defs/ScheduleMissionRequest"
+    },
+    "overlap_mode": {
+      "$ref": "#/$defs/OverlapMode",
+      "default": "block"
+    },
+    "schedule_id": {
+      "format": "uuid",
+      "title": "Schedule Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "trigger": {
+      "discriminator": {
+        "mapping": {
+          "cron": "#/$defs/CronTriggerSpec",
+          "date": "#/$defs/DateTriggerSpec"
+        },
+        "propertyName": "kind"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/DateTriggerSpec"
+        },
+        {
+          "$ref": "#/$defs/CronTriggerSpec"
+        }
+      ],
+      "title": "Trigger"
+    }
+  },
+  "required": [
+    "mission",
+    "trigger"
+  ],
+  "title": "ScheduleCreateRequest",
+  "type": "object"
+}
