@@ -38,8 +38,12 @@ matrices are green. D-047 authorizes I08 Persistent Headless Scheduling on
 `feat/i08-persistent-scheduling`. D-048 accepts its complete gate at `39f04c3`: the deterministic
 local suite and seven-job Linux/macOS Python 3.11–3.13 matrix prove durable timezone-aware
 schedules, idempotent dispatch, overlap/misfire/retry policy, restart recovery, bounded history,
-and governed cron/systemd/launchd exports. I08 may be promoted to `develop`; I09 and later
-increments remain unauthorized until explicit engineer decisions after integration.
+and governed cron/systemd/launchd exports. I08 is integrated into `develop` at `96c519a` and
+promoted to `main` at `6a864ec`; the seven-job integration matrix passed. D-049 authorizes I09
+Distributed Execution on `feat/i09-distributed-execution` with PostgreSQL metadata, S3-compatible
+artifact bodies, individually revocable mTLS worker identities, immutable task envelopes, remote
+CrewAI task execution, reconciled stateful effects, and at-most-once durable result acceptance.
+I10 and later increments remain unauthorized.
 The rejected
 universal workflow, mandatory outcome catalogue, capability-family matrix, static role/tool matrix,
 competing runtime, and private operational deny-list must not return.
