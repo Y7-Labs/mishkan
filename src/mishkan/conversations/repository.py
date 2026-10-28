@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import TypeVar
 
 from pydantic import BaseModel
@@ -29,6 +28,7 @@ from mishkan.domain.time import utc_now
 from mishkan.missions import MissionBrief, MissionRecord, MissionRunReport, MissionState
 from mishkan.organization.models import OrganizationRosterDefinition
 from mishkan.persistence.migration import SchemaManager
+from mishkan.persistence.runtime import DatabaseTarget
 from mishkan.persistence.sqlite import (
     ConversationChannelRow,
     ConversationMessageRow,
@@ -48,7 +48,7 @@ RecordT = TypeVar("RecordT", bound=BaseModel)
 
 
 class SQLiteConversationRepository:
-    def __init__(self, database_path: Path, *, busy_timeout_ms: int = 5_000) -> None:
+    def __init__(self, database_path: DatabaseTarget, *, busy_timeout_ms: int = 5_000) -> None:
         SchemaManager(database_path).require_current()
         self._engine = create_local_engine(database_path, busy_timeout_ms=busy_timeout_ms)
 

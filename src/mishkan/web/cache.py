@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert
@@ -12,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from mishkan.domain.time import require_aware, utc_now
 from mishkan.persistence.migration import SchemaManager
+from mishkan.persistence.runtime import DatabaseTarget
 from mishkan.persistence.sqlite import WebCacheRow, create_local_engine
 from mishkan.web.models import CacheDisposition
 
@@ -25,7 +25,7 @@ class CacheHit:
 
 
 class SQLiteWebCache:
-    def __init__(self, database: Path, *, busy_timeout_ms: int = 5_000) -> None:
+    def __init__(self, database: DatabaseTarget, *, busy_timeout_ms: int = 5_000) -> None:
         SchemaManager(database).require_current()
         self._engine = create_local_engine(database, busy_timeout_ms=busy_timeout_ms)
 

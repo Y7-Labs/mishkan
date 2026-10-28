@@ -6,7 +6,6 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Protocol
 
 from sqlalchemy import (
@@ -17,8 +16,6 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
-    create_engine,
-    event,
     select,
 )
 from sqlalchemy.engine import Engine
@@ -27,6 +24,11 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, rela
 from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.domain.identity import new_id
 from mishkan.domain.time import utc_now
+from mishkan.persistence.runtime import (
+    DEFAULT_BUSY_TIMEOUT_MS,
+    DatabaseTarget,
+    database_engine,
+)
 from mishkan.planning.models import (
     AcceptedPlan,
     InitializationResult,
@@ -42,31 +44,14 @@ from mishkan.runtime import RunState, TaskReviewRejection, TaskState
 from mishkan.tools.execution import EffectSettlement
 from mishkan.tools.gateway_models import AuditEvent, CallStatus, ToolResultEnvelope
 
-DEFAULT_BUSY_TIMEOUT_MS = 5_000
-
 
 def create_local_engine(
-    database_path: Path,
+    database_path: DatabaseTarget,
     *,
     busy_timeout_ms: int = DEFAULT_BUSY_TIMEOUT_MS,
 ) -> Engine:
-    """Create one WAL SQLite engine from the effective public lock-wait setting."""
-    if busy_timeout_ms < 1:
-        raise MishkanError(ErrorCode.CONFIGURATION, "SQLite busy timeout must be positive")
-    engine = create_engine(
-        f"sqlite:///{database_path.resolve()}",
-        connect_args={"timeout": busy_timeout_ms / 1_000},
-    )
-
-    def configure(dbapi_connection: Any, _connection_record: Any) -> None:
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
-        cursor.close()
-
-    event.listen(engine, "connect", configure)
-    return engine
+    """Compatibility factory; shared runtimes preserve one injected engine."""
+    return database_engine(database_path, busy_timeout_ms=busy_timeout_ms)
 
 
 class Base(DeclarativeBase):
@@ -1019,7 +1004,7 @@ class RunContentInspector(Protocol):
 class LocalRunRepository:
     def __init__(
         self,
-        database_path: Path,
+        database_path: DatabaseTarget,
         *,
         busy_timeout_ms: int = DEFAULT_BUSY_TIMEOUT_MS,
         content_inspector: RunContentInspector | None = None,

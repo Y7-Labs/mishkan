@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -11,12 +10,13 @@ from sqlalchemy.orm import Session
 from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.domain.identity import new_id
 from mishkan.persistence.migration import SchemaManager
+from mishkan.persistence.runtime import DatabaseTarget
 from mishkan.persistence.sqlite import OutboxRow, SkillLearningRow, create_local_engine
 from mishkan.skills.models import SkillLearningRecord
 
 
 class SQLiteSkillLearningRepository:
-    def __init__(self, database_path: Path, *, busy_timeout_ms: int = 5_000) -> None:
+    def __init__(self, database_path: DatabaseTarget, *, busy_timeout_ms: int = 5_000) -> None:
         SchemaManager(database_path).require_current()
         self._engine = create_local_engine(database_path, busy_timeout_ms=busy_timeout_ms)
 

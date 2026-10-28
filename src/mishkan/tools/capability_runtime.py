@@ -16,6 +16,7 @@ from mishkan.browser import (
 from mishkan.config.models import MishkanConfig
 from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.edits.git import GovernedGitService
+from mishkan.persistence.runtime import DatabaseTarget
 from mishkan.policy.models import EffectivePolicy
 from mishkan.tools.adapters import CapabilityAdapter
 from mishkan.tools.git import build_git_adapters
@@ -59,7 +60,7 @@ class CapabilityRuntime:
 
 def build_capability_runtime(
     config: MishkanConfig,
-    database: Path,
+    database: DatabaseTarget,
     workspace: Path,
     artifacts: DurableArtifactService,
     inspector: ContentInspector,

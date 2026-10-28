@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy import select
@@ -15,6 +14,7 @@ from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.domain.identity import new_id
 from mishkan.domain.time import require_aware, utc_now
 from mishkan.persistence.migration import SchemaManager
+from mishkan.persistence.runtime import DatabaseTarget
 from mishkan.persistence.sqlite import (
     CommandRow,
     OutboxRow,
@@ -42,7 +42,7 @@ _TERMINAL_RUN_STATES = {
 
 
 class SQLiteScheduleRepository:
-    def __init__(self, database_path: Path, *, busy_timeout_ms: int = 5_000) -> None:
+    def __init__(self, database_path: DatabaseTarget, *, busy_timeout_ms: int = 5_000) -> None:
         SchemaManager(database_path).require_current()
         self._engine = create_local_engine(database_path, busy_timeout_ms=busy_timeout_ms)
 

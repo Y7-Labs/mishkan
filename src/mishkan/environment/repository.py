@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 from typing import Any, Protocol, TypeVar
 
 from pydantic import BaseModel
@@ -25,6 +24,7 @@ from mishkan.environment.models import (
     EnvironmentVerification,
 )
 from mishkan.persistence.migration import SchemaManager
+from mishkan.persistence.runtime import DatabaseTarget
 from mishkan.persistence.sqlite import (
     EnvironmentAttemptRow,
     EnvironmentBindingRow,
@@ -48,7 +48,7 @@ class ArtifactLookup(Protocol):
 class SQLiteEnvironmentRepository:
     def __init__(
         self,
-        database_path: Path,
+        database_path: DatabaseTarget,
         *,
         artifacts: ArtifactLookup,
         busy_timeout_ms: int = 5_000,

@@ -47,6 +47,7 @@ from mishkan.knowledge.models import (
     KnowledgeRefreshRequest,
 )
 from mishkan.persistence.migration import SchemaManager
+from mishkan.persistence.runtime import DatabaseTarget
 from mishkan.persistence.sqlite import AcceptanceRow, ResultRow, create_local_engine
 
 
@@ -245,7 +246,7 @@ class GraphRefreshPort(Protocol):
 class SQLiteAcceptedResultVerifier:
     """Prove memory proposals originate from an actually accepted task result."""
 
-    def __init__(self, database_path: Any, *, busy_timeout_ms: int = 5_000) -> None:
+    def __init__(self, database_path: DatabaseTarget, *, busy_timeout_ms: int = 5_000) -> None:
         SchemaManager(database_path).require_current()
         self._engine = create_local_engine(database_path, busy_timeout_ms=busy_timeout_ms)
 

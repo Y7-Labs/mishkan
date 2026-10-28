@@ -40,6 +40,7 @@ from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.domain.identity import new_id
 from mishkan.domain.time import utc_now
 from mishkan.persistence.migration import SchemaManager
+from mishkan.persistence.runtime import DatabaseTarget
 from mishkan.persistence.sqlite import (
     ArtifactCollectionRow,
     ArtifactGCPlanRow,
@@ -74,7 +75,7 @@ class DurableArtifactService:
 
     def __init__(
         self,
-        database: Path,
+        database: DatabaseTarget,
         root: Path,
         *,
         max_artifact_bytes: int,
