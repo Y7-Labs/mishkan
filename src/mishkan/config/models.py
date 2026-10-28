@@ -2,8 +2,8 @@
 
 import ipaddress
 from enum import StrEnum
-from pathlib import Path
-from typing import Self
+from pathlib import Path, PurePosixPath
+from typing import Annotated, Literal, Self
 
 from pydantic import (
     AnyHttpUrl,
@@ -104,13 +104,11 @@ class DaemonConfig(StrictConfigModel):
 
     @field_validator("host")
     @classmethod
-    def host_is_loopback_for_i03(cls, value: str) -> str:
+    def host_is_literal_address(cls, value: str) -> str:
         try:
-            address = ipaddress.ip_address(value)
+            ipaddress.ip_address(value)
         except ValueError as exc:
-            raise ValueError("daemon host must be a literal loopback address") from exc
-        if not address.is_loopback:
-            raise ValueError("daemon host must be loopback-only")
+            raise ValueError("daemon host must be a literal IP address") from exc
         return value
 
     @field_validator("token_file")
@@ -122,6 +120,7 @@ class DaemonConfig(StrictConfigModel):
 
 
 class PersistenceConfig(StrictConfigModel):
+    kind: Literal["sqlite"] = "sqlite"
     database: Path
     busy_timeout_ms: int = Field(ge=1, le=300_000)
     event_retention_days: int = Field(ge=1, le=36_500)
@@ -134,7 +133,24 @@ class PersistenceConfig(StrictConfigModel):
         return value
 
 
+class PostgreSQLPersistenceConfig(StrictConfigModel):
+    kind: Literal["postgresql"]
+    dsn_ref: CredentialReference
+    pool_size: int = Field(default=10, ge=1, le=1_000)
+    max_overflow: int = Field(default=20, ge=0, le=10_000)
+    connect_timeout_seconds: int = Field(default=10, ge=1, le=300)
+    statement_timeout_ms: int = Field(default=120_000, ge=1, le=3_600_000)
+    event_retention_days: int = Field(ge=1, le=36_500)
+
+
+PersistenceBackendConfig = Annotated[
+    PersistenceConfig | PostgreSQLPersistenceConfig,
+    Field(discriminator="kind"),
+]
+
+
 class ArtifactConfig(StrictConfigModel):
+    kind: Literal["filesystem"] = "filesystem"
     root: Path
     max_artifact_bytes: int = Field(ge=1)
     chunk_bytes: int = Field(ge=1)
@@ -146,6 +162,88 @@ class ArtifactConfig(StrictConfigModel):
         if value.is_absolute() or not value.parts:
             raise ValueError("artifact root must be project-relative")
         return value
+
+
+class S3ArtifactConfig(StrictConfigModel):
+    kind: Literal["s3"]
+    endpoint: AnyHttpUrl | None = None
+    bucket: str = Field(min_length=1, max_length=255)
+    prefix: str = Field(default="", max_length=1_024)
+    region: str | None = Field(default=None, min_length=1, max_length=128)
+    addressing_style: Literal["path", "virtual"] = "path"
+    tls_verify: bool = True
+    ca_bundle: Path | None = None
+    access_key_ref: CredentialReference | None = None
+    secret_key_ref: CredentialReference | None = None
+    session_token_ref: CredentialReference | None = None
+    staging_root: Path
+    max_artifact_bytes: int = Field(ge=1)
+    chunk_bytes: int = Field(ge=1)
+    staging_ttl_seconds: int = Field(ge=1)
+    multipart_threshold_bytes: int = Field(ge=1)
+    multipart_chunk_bytes: int = Field(ge=5 * 1024 * 1024, le=5 * 1024 * 1024 * 1024)
+
+    @field_validator("prefix")
+    @classmethod
+    def prefix_is_safe(cls, value: str) -> str:
+        normalized = value.strip("/")
+        if ".." in PurePosixPath(normalized).parts:
+            raise ValueError("artifact S3 prefix cannot traverse")
+        return normalized
+
+    @field_validator("staging_root", "ca_bundle")
+    @classmethod
+    def local_paths_are_project_relative(cls, value: Path | None) -> Path | None:
+        if value is not None and (value.is_absolute() or not value.parts or ".." in value.parts):
+            raise ValueError("artifact S3 local paths must be project-relative")
+        return value
+
+    @model_validator(mode="after")
+    def credential_pair_is_complete(self) -> Self:
+        if (self.access_key_ref is None) != (self.secret_key_ref is None):
+            raise ValueError(
+                "S3 access and secret credential references must be configured together"
+            )
+        if self.session_token_ref is not None and self.access_key_ref is None:
+            raise ValueError("S3 session credential requires access and secret references")
+        if self.multipart_threshold_bytes > self.max_artifact_bytes:
+            raise ValueError("S3 multipart threshold cannot exceed the artifact size bound")
+        return self
+
+
+ArtifactBackendConfig = Annotated[
+    ArtifactConfig | S3ArtifactConfig,
+    Field(discriminator="kind"),
+]
+
+
+class DistributedConfig(StrictConfigModel):
+    """Public coordination and worker bounds for distributed mode."""
+
+    enrollment_ttl_seconds: int = Field(default=600, ge=30, le=3_600)
+    certificate_ttl_seconds: int = Field(default=86_400, ge=300, le=31_536_000)
+    certificate_rotation_before_seconds: int = Field(default=3_600, ge=60, le=2_592_000)
+    heartbeat_interval_seconds: int = Field(default=10, ge=1, le=300)
+    heartbeat_timeout_seconds: int = Field(default=30, ge=2, le=3_600)
+    lease_seconds: int = Field(default=60, ge=5, le=86_400)
+    claim_page_limit: int = Field(default=10, ge=1, le=1_000)
+    max_worker_concurrency: int = Field(default=8, ge=1, le=10_000)
+    max_envelope_bytes: int = Field(default=8_388_608, ge=1, le=1_073_741_824)
+    max_completion_bytes: int = Field(default=67_108_864, ge=1, le=1_073_741_824)
+    server_certificate_ref: CredentialReference
+    server_private_key_ref: CredentialReference
+    worker_ca_certificate_ref: CredentialReference
+    worker_ca_private_key_ref: CredentialReference
+
+    @model_validator(mode="after")
+    def worker_timing_is_coherent(self) -> Self:
+        if self.heartbeat_timeout_seconds <= self.heartbeat_interval_seconds:
+            raise ValueError("worker heartbeat timeout must exceed its interval")
+        if self.lease_seconds <= self.heartbeat_interval_seconds:
+            raise ValueError("worker lease must exceed its heartbeat interval")
+        if self.certificate_rotation_before_seconds >= self.certificate_ttl_seconds:
+            raise ValueError("certificate rotation window must be below certificate lifetime")
+        return self
 
 
 class SessionEffectObservationConfig(StrictConfigModel):
@@ -854,8 +952,8 @@ class MishkanConfig(StrictConfigModel):
     isolation_profiles: tuple[str, ...] = ()
     crewai: CrewAIRuntimeConfig = Field(default_factory=CrewAIRuntimeConfig)
     daemon: DaemonConfig | None = None
-    persistence: PersistenceConfig | None = None
-    artifacts: ArtifactConfig | None = None
+    persistence: PersistenceBackendConfig | None = None
+    artifacts: ArtifactBackendConfig | None = None
     sessions: SessionConfig | None = None
     web: WebConfig | None = None
     browser: BrowserConfig | None = None
@@ -875,6 +973,7 @@ class MishkanConfig(StrictConfigModel):
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     knowledge: KnowledgeConfig | None = None
     scheduling: SchedulingConfig | None = None
+    distributed: DistributedConfig | None = None
 
     @field_validator("timezone")
     @classmethod
@@ -883,7 +982,16 @@ class MishkanConfig(StrictConfigModel):
 
     @model_validator(mode="after")
     def references_exist(self) -> Self:
-        if self.schema_version in {"1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"}:
+        if self.schema_version in {
+            "1.1",
+            "1.2",
+            "1.3",
+            "1.4",
+            "1.5",
+            "1.6",
+            "1.7",
+            "1.8",
+        }:
             missing = [
                 field
                 for field, value in (
@@ -897,7 +1005,7 @@ class MishkanConfig(StrictConfigModel):
                 raise ValueError(
                     f"configuration 1.1 requires governed capability fields: {missing}"
                 )
-        if self.schema_version in {"1.2", "1.3", "1.4", "1.5", "1.6", "1.7"}:
+        if self.schema_version in {"1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8"}:
             missing_daemon = [
                 field
                 for field, value in (
@@ -910,7 +1018,7 @@ class MishkanConfig(StrictConfigModel):
             ]
             if missing_daemon:
                 raise ValueError(f"configuration 1.2 requires daemon fields: {missing_daemon}")
-        if self.schema_version in {"1.3", "1.4", "1.5", "1.6", "1.7"}:
+        if self.schema_version in {"1.3", "1.4", "1.5", "1.6", "1.7", "1.8"}:
             missing_capabilities = [
                 field
                 for field, value in (
@@ -947,11 +1055,11 @@ class MishkanConfig(StrictConfigModel):
                 and self.telemetry.exporter.network_profile not in self.web.network_profiles
             ):
                 raise ValueError("telemetry exporter references an unknown network profile")
-        if self.schema_version in {"1.4", "1.5", "1.6", "1.7"} and self.skills is None:
+        if self.schema_version in {"1.4", "1.5", "1.6", "1.7", "1.8"} and self.skills is None:
             raise ValueError("configuration 1.4+ requires the Skills capability configuration")
-        if self.schema_version in {"1.5", "1.6", "1.7"} and self.engineering_profile is None:
+        if self.schema_version in {"1.5", "1.6", "1.7", "1.8"} and self.engineering_profile is None:
             raise ValueError("configuration 1.5+ requires an Engineering profile")
-        if self.schema_version in {"1.6", "1.7"}:
+        if self.schema_version in {"1.6", "1.7", "1.8"}:
             if self.knowledge is None:
                 raise ValueError("configuration 1.6 requires Knowledge configuration")
             assert self.web is not None
@@ -980,8 +1088,32 @@ class MishkanConfig(StrictConfigModel):
                     "knowledge configuration references unknown MCP connections: "
                     f"{missing_knowledge_mcp}"
                 )
-        if self.schema_version == "1.7" and self.scheduling is None:
+        if self.schema_version in {"1.7", "1.8"} and self.scheduling is None:
             raise ValueError("configuration 1.7 requires Scheduling configuration")
+        if self.daemon is not None:
+            daemon_address = ipaddress.ip_address(self.daemon.host)
+            if self.mode is not OperatingMode.DISTRIBUTED and not daemon_address.is_loopback:
+                raise ValueError("non-distributed daemon host must remain loopback-only")
+        if self.mode is OperatingMode.DISTRIBUTED and self.schema_version != "1.8":
+            raise ValueError("distributed mode requires configuration schema 1.8")
+        if self.schema_version == "1.8":
+            assert self.daemon is not None
+            assert self.persistence is not None
+            assert self.artifacts is not None
+            if self.mode is OperatingMode.DISTRIBUTED:
+                if not isinstance(self.persistence, PostgreSQLPersistenceConfig):
+                    raise ValueError("distributed mode requires PostgreSQL persistence")
+                if not isinstance(self.artifacts, S3ArtifactConfig):
+                    raise ValueError("distributed mode requires S3 artifact bodies")
+                if self.distributed is None:
+                    raise ValueError("distributed mode requires worker coordination configuration")
+            else:
+                if not isinstance(self.persistence, PersistenceConfig):
+                    raise ValueError("non-distributed modes require SQLite persistence")
+                if not isinstance(self.artifacts, ArtifactConfig):
+                    raise ValueError("non-distributed modes require filesystem artifact bodies")
+                if self.distributed is not None:
+                    raise ValueError("worker coordination configuration requires distributed mode")
 
         missing_providers = sorted(
             {

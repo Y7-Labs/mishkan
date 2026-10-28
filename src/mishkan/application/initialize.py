@@ -6,7 +6,12 @@ from pathlib import Path
 
 from mishkan.artifacts import ArtifactStore, FilesystemArtifactStore
 from mishkan.artifacts.service import DurableArtifactService
-from mishkan.config.models import CredentialReference, MishkanConfig
+from mishkan.config.models import (
+    ArtifactConfig,
+    CredentialReference,
+    MishkanConfig,
+    PersistenceConfig,
+)
 from mishkan.crewai.credentials import CredentialPoolResolver
 from mishkan.crewai.environment import configure_crewai_environment
 from mishkan.domain.errors import ErrorCode, MishkanError
@@ -75,7 +80,16 @@ class MishkanInitializer:
         on_run_started: Callable[[str], None] | None = None,
         capability_adapters: Mapping[str, CapabilityAdapter] | None = None,
     ) -> InitializationReport:
-        if config.schema_version not in {"1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"}:
+        if config.schema_version not in {
+            "1.1",
+            "1.2",
+            "1.3",
+            "1.4",
+            "1.5",
+            "1.6",
+            "1.7",
+            "1.8",
+        }:
             raise MishkanError(
                 ErrorCode.VERSION,
                 "governed initialization requires configuration schema 1.1 or 1.2",
@@ -94,7 +108,9 @@ class MishkanInitializer:
         SchemaManager(database).initialize_if_empty()
         persistence_config = config.persistence
         busy_timeout_ms = (
-            persistence_config.busy_timeout_ms if persistence_config is not None else 5_000
+            persistence_config.busy_timeout_ms
+            if isinstance(persistence_config, PersistenceConfig)
+            else 5_000
         )
         database_runtime = DatabaseRuntime.sqlite(
             database,
@@ -139,9 +155,13 @@ class MishkanInitializer:
                     | frozenset({ContainerCommandAdapter.adapter_id})
                 ),
             )
-        if config.schema_version in {"1.3", "1.4", "1.5", "1.6", "1.7"}:
+        if config.schema_version in {"1.3", "1.4", "1.5", "1.6", "1.7", "1.8"}:
             artifact_config = config.artifacts
-            assert artifact_config is not None
+            if not isinstance(artifact_config, ArtifactConfig):
+                raise MishkanError(
+                    ErrorCode.CONFIGURATION,
+                    "repository initialization requires filesystem artifact storage",
+                )
             durable_artifacts = DurableArtifactService(
                 database_runtime,
                 discovery.binding.root / artifact_config.root,

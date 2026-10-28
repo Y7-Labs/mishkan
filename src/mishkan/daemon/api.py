@@ -43,7 +43,7 @@ from mishkan.artifacts import (
     ArtifactHold as ArtifactEvidenceHold,
 )
 from mishkan.artifacts.service import DurableArtifactService
-from mishkan.config.models import CredentialReference, McpConfig, MishkanConfig
+from mishkan.config.models import CredentialReference, McpConfig, MishkanConfig, OperatingMode
 from mishkan.context import (
     CommunityCandidateLoader,
     ContextualRecommendation,
@@ -69,6 +69,11 @@ from mishkan.crewai.mission_governance import (
 from mishkan.crewai.skill_learning import CrewAISkillLearningRunner
 from mishkan.daemon.auth import TokenFile, TokenRecord
 from mishkan.daemon.bootstrap import DaemonPaths
+from mishkan.daemon.composition import (
+    build_artifact_body_store,
+    build_database_runtime,
+    repository_busy_timeout_ms,
+)
 from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.domain.time import utc_now
 from mishkan.edits import ChangeSet, ChangeSetResult, ChangeSetService
@@ -179,7 +184,6 @@ from mishkan.organization import (
 )
 from mishkan.organization.evolution_repository import SQLiteProfessionalEvolutionRepository
 from mishkan.persistence import (
-    DatabaseRuntime,
     LocalRunRepository,
     SchemaManager,
     SQLiteApplicationRepository,
@@ -451,23 +455,25 @@ def create_app(
     mission_environment_runner: MissionEnvironmentPlanningRunner | None = None,
     telemetry_exporter_factory: Callable[[], TelemetryExporter] | None = None,
 ) -> FastAPI:
+    if config.mode is OperatingMode.DISTRIBUTED:
+        raise MishkanError(
+            ErrorCode.CONFIGURATION,
+            "distributed daemon startup requires the I09 mTLS listener boundary",
+        )
     paths = DaemonPaths.from_config(config)
-    SchemaManager(paths.database).require_current()
     token_file = TokenFile(paths.token_file)
     token_file.read()
     persistence = config.persistence
     assert persistence is not None
-    database_runtime = DatabaseRuntime.sqlite(
-        paths.database,
-        busy_timeout_ms=persistence.busy_timeout_ms,
-    )
+    credential_resolver = CredentialPoolResolver()
+    database_runtime = build_database_runtime(config, paths, credential_resolver)
+    SchemaManager(database_runtime).require_current()
+    busy_timeout_ms = repository_busy_timeout_ms(config)
     repository = SQLiteApplicationRepository(
         database_runtime,
-        busy_timeout_ms=persistence.busy_timeout_ms,
+        busy_timeout_ms=busy_timeout_ms,
     )
-    registry_lifecycle = ToolRegistryLifecycle(
-        database_runtime, busy_timeout_ms=persistence.busy_timeout_ms
-    )
+    registry_lifecycle = ToolRegistryLifecycle(database_runtime, busy_timeout_ms=busy_timeout_ms)
     security = HTTPBearer(auto_error=False)
     security_dependency = Depends(security)
     daemon = config.daemon
@@ -485,7 +491,7 @@ def create_app(
     )
     run_repository = LocalRunRepository(
         database_runtime,
-        busy_timeout_ms=persistence.busy_timeout_ms,
+        busy_timeout_ms=busy_timeout_ms,
         content_inspector=content_inspector,
     )
     scheduling_config = config.scheduling
@@ -497,7 +503,7 @@ def create_app(
     schedule_repository = (
         SQLiteScheduleRepository(
             database_runtime,
-            busy_timeout_ms=persistence.busy_timeout_ms,
+            busy_timeout_ms=busy_timeout_ms,
         )
         if scheduling_config is not None
         else None
@@ -512,9 +518,10 @@ def create_app(
         paths.artifacts,
         max_artifact_bytes=artifact_config.max_artifact_bytes,
         max_chunk_bytes=artifact_config.chunk_bytes,
-        busy_timeout_ms=persistence.busy_timeout_ms,
+        busy_timeout_ms=busy_timeout_ms,
         staging_ttl_seconds=artifact_config.staging_ttl_seconds,
         content_inspector=content_inspector,
+        body_store=build_artifact_body_store(config, paths, credential_resolver),
     )
     environment_repository: SQLiteEnvironmentRepository | None = None
     environment_observer: EnvironmentObserver | None = None
@@ -533,7 +540,7 @@ def create_app(
         environment_repository = SQLiteEnvironmentRepository(
             database_runtime,
             artifacts=artifacts,
-            busy_timeout_ms=persistence.busy_timeout_ms,
+            busy_timeout_ms=busy_timeout_ms,
         )
         environment_observer = EnvironmentObserver(environment_profile)
         environment_resolver = EnvironmentResolver(
@@ -568,11 +575,9 @@ def create_app(
     skill_maintenance: SkillMaintenanceService | None = None
     if config.skills is not None:
         skill_lifecycle = SQLiteSkillLifecycleRepository(
-            database_runtime, busy_timeout_ms=persistence.busy_timeout_ms
+            database_runtime, busy_timeout_ms=busy_timeout_ms
         )
-        skill_usage = SQLiteSkillUsageRepository(
-            database_runtime, busy_timeout_ms=persistence.busy_timeout_ms
-        )
+        skill_usage = SQLiteSkillUsageRepository(database_runtime, busy_timeout_ms=busy_timeout_ms)
         skill_inspector = SkillPackageInspector(
             SkillInspectionProfileLoader().load(
                 config.skills.inspection_profile,
@@ -588,7 +593,7 @@ def create_app(
             max_automatic_skills=config.skills.max_automatic_skills,
         )
         skill_learning_repository = SQLiteSkillLearningRepository(
-            database_runtime, busy_timeout_ms=persistence.busy_timeout_ms
+            database_runtime, busy_timeout_ms=busy_timeout_ms
         )
         skill_learning_service = SkillLearningService(
             skill_learning_repository,
@@ -612,7 +617,7 @@ def create_app(
         database_runtime,
         paths.workspace,
         artifacts,
-        busy_timeout_ms=persistence.busy_timeout_ms,
+        busy_timeout_ms=busy_timeout_ms,
         content_inspector=content_inspector,
     )
     git_effects = GovernedGitService(artifacts)
@@ -624,7 +629,7 @@ def create_app(
         paths.sessions,
         session_config,
         artifacts,
-        busy_timeout_ms=persistence.busy_timeout_ms,
+        busy_timeout_ms=busy_timeout_ms,
         content_inspector=content_inspector,
     )
     supervisor.reconcile_all()
@@ -645,7 +650,7 @@ def create_app(
             )
         mcp_repository = McpRepository(
             database_runtime,
-            busy_timeout_ms=persistence.busy_timeout_ms,
+            busy_timeout_ms=busy_timeout_ms,
         )
         stdio_commands = dict(mcp_stdio_commands or {})
         if mcp_stdio_commands is None and any(
@@ -668,7 +673,6 @@ def create_app(
         )
         mcp_service.reconcile_after_restart()
         mcp_runner = McpServiceRunner(mcp_service)
-    credential_resolver = CredentialPoolResolver()
     knowledge_repository: SQLiteKnowledgeRepository | None = None
     knowledge_service: KnowledgeService | None = None
     knowledge_mutations: KnowledgeMutationService | None = None
@@ -676,7 +680,7 @@ def create_app(
     if config.knowledge is not None:
         knowledge_repository = SQLiteKnowledgeRepository(
             database_runtime,
-            busy_timeout_ms=persistence.busy_timeout_ms,
+            busy_timeout_ms=busy_timeout_ms,
         )
         knowledge_policy = DaemonKnowledgePolicy(config.knowledge, paths.workspace)
         knowledge_inspector = KnowledgeEvidenceInspector(
@@ -748,7 +752,7 @@ def create_app(
             policy=knowledge_policy,
             accepted_results=SQLiteAcceptedResultVerifier(
                 database_runtime,
-                busy_timeout_ms=persistence.busy_timeout_ms,
+                busy_timeout_ms=busy_timeout_ms,
             ),
             graph_refresh=graph_refresh,
             credential_resolver=credential_resolver,
@@ -782,18 +786,18 @@ def create_app(
     )
     mission_repository = SQLiteMissionRepository(
         database_runtime,
-        busy_timeout_ms=persistence.busy_timeout_ms,
+        busy_timeout_ms=busy_timeout_ms,
     )
     # Loading the daemon must not advance the public event cursor. The immutable
     # roster is persisted as reference data; explicit roster changes remain events.
     mission_repository.record_organization(load_canonical_organization(), emit_event=False)
     conversation_repository = SQLiteConversationRepository(
         database_runtime,
-        busy_timeout_ms=persistence.busy_timeout_ms,
+        busy_timeout_ms=busy_timeout_ms,
     )
     professional_evolution = SQLiteProfessionalEvolutionRepository(
         database_runtime,
-        busy_timeout_ms=persistence.busy_timeout_ms,
+        busy_timeout_ms=busy_timeout_ms,
     )
     mission_templates = MissionTemplateService(
         MissionTemplateLoader().load(config.mission_template_sources, paths.workspace)
@@ -1334,7 +1338,7 @@ def create_app(
 
     mcp_http: McpHttpFacade | None = None
     if mcp_config is not None and mcp_config.facade.enabled:
-        schema_revision = SchemaManager(paths.database).status().head_revision
+        schema_revision = SchemaManager(database_runtime).status().head_revision
         router = McpFacadeRouter(
             mcp_config,
             repository,
@@ -1416,7 +1420,7 @@ def create_app(
 
     @app.get("/v1/health")
     async def health() -> dict[str, str]:
-        status = SchemaManager(paths.database).status()
+        status = SchemaManager(database_runtime).status()
         return {"status": "ready", "schema": status.head_revision}
 
     @app.post("/v1/commands", response_model=CommandResult)

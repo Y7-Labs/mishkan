@@ -1447,20 +1447,27 @@ def rotate_daemon_token(ctx: typer.Context) -> None:
 @database_app.command("status")
 def database_status(ctx: typer.Context) -> None:
     """Report the observed schema without changing it."""
+    from mishkan.crewai.credentials import CredentialPoolResolver
     from mishkan.daemon.bootstrap import DaemonPaths
+    from mishkan.daemon.composition import build_database_runtime
     from mishkan.persistence import SchemaManager
 
     state = _state(ctx)
     effective = _load_or_exit(ctx)
     try:
         paths = DaemonPaths.from_config(effective.value)
-        observed = SchemaManager(paths.database).status()
+        runtime = build_database_runtime(effective.value, paths, CredentialPoolResolver())
+        try:
+            observed = SchemaManager(runtime).status()
+            database_name = runtime.display_name
+        finally:
+            runtime.dispose()
     except MishkanError as error:
         _emit_error(error, as_json=state.json_output)
         raise typer.Exit(code=2) from error
     _emit(
         {
-            "database": str(paths.database),
+            "database": database_name,
             "state": observed.state.value,
             "current_revision": observed.current_revision,
             "head_revision": observed.head_revision,
@@ -1472,34 +1479,47 @@ def database_status(ctx: typer.Context) -> None:
 @database_app.command("upgrade")
 def database_upgrade(ctx: typer.Context) -> None:
     """Back up and explicitly upgrade recognized metadata to the current head."""
+    from mishkan.crewai.credentials import CredentialPoolResolver
     from mishkan.daemon.bootstrap import DaemonPaths
+    from mishkan.daemon.composition import (
+        build_artifact_body_store,
+        build_database_runtime,
+        repository_busy_timeout_ms,
+    )
     from mishkan.persistence import SchemaManager
 
     state = _state(ctx)
     effective = _load_or_exit(ctx)
     try:
         paths = DaemonPaths.from_config(effective.value)
-        observed = SchemaManager(paths.database).upgrade()
-        artifact_config = effective.value.artifacts
-        persistence_config = effective.value.persistence
-        assert artifact_config is not None
-        assert persistence_config is not None
-        from mishkan.artifacts.service import DurableArtifactService
+        credentials = CredentialPoolResolver()
+        runtime = build_database_runtime(effective.value, paths, credentials)
+        try:
+            observed = SchemaManager(runtime).upgrade()
+            artifact_config = effective.value.artifacts
+            persistence_config = effective.value.persistence
+            assert artifact_config is not None
+            assert persistence_config is not None
+            from mishkan.artifacts.service import DurableArtifactService
 
-        imported_artifacts = DurableArtifactService(
-            paths.database,
-            paths.artifacts,
-            max_artifact_bytes=artifact_config.max_artifact_bytes,
-            max_chunk_bytes=artifact_config.chunk_bytes,
-            busy_timeout_ms=persistence_config.busy_timeout_ms,
-            staging_ttl_seconds=artifact_config.staging_ttl_seconds,
-        ).import_legacy_manifests()
+            imported_artifacts = DurableArtifactService(
+                runtime,
+                paths.artifacts,
+                max_artifact_bytes=artifact_config.max_artifact_bytes,
+                max_chunk_bytes=artifact_config.chunk_bytes,
+                busy_timeout_ms=repository_busy_timeout_ms(effective.value),
+                staging_ttl_seconds=artifact_config.staging_ttl_seconds,
+                body_store=build_artifact_body_store(effective.value, paths, credentials),
+            ).import_legacy_manifests()
+            database_name = runtime.display_name
+        finally:
+            runtime.dispose()
     except MishkanError as error:
         _emit_error(error, as_json=state.json_output)
         raise typer.Exit(code=2) from error
     _emit(
         {
-            "database": str(paths.database),
+            "database": database_name,
             "state": observed.state.value,
             "revision": observed.current_revision,
             "backup": str(observed.backup_path) if observed.backup_path else None,
