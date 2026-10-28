@@ -1,10 +1,10 @@
 # I08 Persistent Headless Scheduling — Validation Evidence
 
-**Status:** Passed — D-048  
-**Observed:** 2026-10-28  
-**Branch:** `feat/i08-persistent-scheduling`  
-**Accepted checkpoint:** `29247a8`  
-**GitHub Actions:** [run 40763314696](https://github.com/Y7-Labs/mishkan/actions/runs/40763314696)
+**Status:** Passed — D-048
+**Observed:** 2026-10-28
+**Branch:** `feat/i08-persistent-scheduling`
+**Accepted checkpoint:** `39f04c3`
+**GitHub Actions:** [run 40771146216](https://github.com/Y7-Labs/mishkan/actions/runs/40771146216)
 
 ## Gate result
 
@@ -22,10 +22,12 @@ security, and export tests also passed after the final corrections. The accepted
 retains the existing daemon-startup and sustained event-ingestion performance gates.
 
 One first macOS/Python 3.13 attempt ran for 20 minutes on a saturated runner and missed the event
-rate gate by 3.6 events per second while an unrelated local `git rev-parse` exceeded its ten-second
-bound. Both exact tests passed together under local Python 3.13, and the isolated GitHub rerun passed
-the complete 764-test job in 7 minutes 26 seconds. No production durability setting or acceptance
-threshold was weakened to hide that transient runner contention.
+rate gate by 3.6 events per second while a local `git rev-parse` exceeded a fixed ten-second bound.
+Both exact tests passed together under local Python 3.13, and an isolated GitHub rerun passed the
+complete 764-test job. A later macOS job reproduced the Git timeout and proved it was a real
+configuration-boundary defect rather than only runner contention. Checkpoint `39f04c3` makes every
+Git identity, state, effect, and evidence probe use the request's public policy-governed timeout.
+The final seven-job matrix passed without weakening the durability or performance thresholds.
 
 ## Durable scheduling authority
 
@@ -77,6 +79,9 @@ The final review found and closed these implementation or proof gaps:
   launchd delegates the due decision to the daemon through periodic governed wake-ups;
 - `scheduling.history_page_limit` existed publicly but did not bound every daemon history surface;
   oversized requests are now refused and all projections apply the configured maximum;
+- Git effect preconditions and evidence probes used private ten- and thirty-second subprocess
+  bounds instead of the request's public governed timeout; every Git subprocess now uses that
+  declared budget, with a regression proving propagation through stage and commit;
 - driver recovery, malformed accepted results, retry settlement, compatibility checks, trigger
   identity, and export boundaries lacked complete negative coverage; focused tests now exercise
   those branches and the scheduling driver, contracts, repository, and service each exceed the
@@ -88,6 +93,6 @@ agent runtime was introduced.
 
 ## Decision
 
-D-048 accepts I08 at `29247a8` based on the complete local and seven-job remote evidence above. I08
+D-048 accepts I08 at `39f04c3` based on the complete local and seven-job remote evidence above. I08
 may be promoted from its topic branch to `develop`. I09 distributed execution remains unauthorized
 until an explicit engineer decision after the I08 integration gate.

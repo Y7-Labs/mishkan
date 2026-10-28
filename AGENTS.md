@@ -35,7 +35,7 @@ local suite, authenticated live mem0/Cognee/Graphify stack, performance gates, v
 catalogue, and seven-job Linux/macOS Python 3.11–3.13 matrix are green. I07 is closed on its topic
 branch, integrated into `develop` at `4de87b2`, and promoted to `main` at `0b6c64c`; both integration
 matrices are green. D-047 authorizes I08 Persistent Headless Scheduling on
-`feat/i08-persistent-scheduling`. D-048 accepts its complete gate at `29247a8`: the deterministic
+`feat/i08-persistent-scheduling`. D-048 accepts its complete gate at `39f04c3`: the deterministic
 local suite and seven-job Linux/macOS Python 3.11–3.13 matrix prove durable timezone-aware
 schedules, idempotent dispatch, overlap/misfire/retry policy, restart recovery, bounded history,
 and governed cron/systemd/launchd exports. I08 may be promoted to `develop`; I09 and later
