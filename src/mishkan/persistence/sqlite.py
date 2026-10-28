@@ -982,6 +982,47 @@ class ScheduleOccurrenceRow(Base):
     updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
 
 
+class WorkerIdentityRow(Base):
+    __tablename__ = "worker_identities"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    current_certificate_serial: Mapped[str | None] = mapped_column(String(128))
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    revoked_at: Mapped[str | None] = mapped_column(String(40))
+
+
+class WorkerEnrollmentTokenRow(Base):
+    __tablename__ = "worker_enrollment_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    token_digest: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(256), nullable=False)
+    worker_id: Mapped[str | None] = mapped_column(ForeignKey("worker_identities.id"))
+    expires_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    consumed_at: Mapped[str | None] = mapped_column(String(40))
+    revoked_at: Mapped[str | None] = mapped_column(String(40))
+
+
+class WorkerCertificateRow(Base):
+    __tablename__ = "worker_certificates"
+
+    serial: Mapped[str] = mapped_column(String(128), primary_key=True)
+    worker_id: Mapped[str] = mapped_column(ForeignKey("worker_identities.id"), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    not_before: Mapped[str] = mapped_column(String(40), nullable=False)
+    not_after: Mapped[str] = mapped_column(String(40), nullable=False)
+    issued_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    superseded_at: Mapped[str | None] = mapped_column(String(40))
+    revoked_at: Mapped[str | None] = mapped_column(String(40))
+
+
 @dataclass(frozen=True, slots=True)
 class RunSnapshot:
     run_id: str

@@ -33,6 +33,7 @@ dependencies = [
   "apscheduler==3.11.3",
   "psycopg[binary]>=3.3,<4",
   "boto3>=1.43,<2",
+  "cryptography>=50.0.2,<51",
 ]
 
 [project.scripts]
