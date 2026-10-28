@@ -49,6 +49,7 @@ class OccurrenceState(StrEnum):
     RETRY_WAITING = "retry_waiting"
     ACCEPTED = "accepted"
     MISFIRED = "misfired"
+    COALESCED = "coalesced"
     OVERLAP_BLOCKED = "overlap_blocked"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -110,6 +111,8 @@ class ScheduleMissionRequest(SchedulingModel):
             not key or len(key) > 256 or len(value) > 16_384 for key, value in self.inputs.items()
         ):
             raise ValueError("scheduled mission inputs exceed their public bounds")
+        if len(self.rendered_objective) > 2_000:
+            raise ValueError("rendered scheduled mission objective exceeds 2000 characters")
         return self
 
     @property
@@ -141,6 +144,19 @@ class ScheduleCreateRequest(SchedulingModel):
     mission: ScheduleMissionRequest
     trigger: ScheduleTrigger
     overlap_mode: OverlapMode = OverlapMode.BLOCK
+
+
+class ScheduleFireRequest(SchedulingModel):
+    """Observed wake-up from the daemon timer or an external OS scheduler."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    source: Literal[OccurrenceSource.INTERNAL, OccurrenceSource.EXTERNAL]
+    observed_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator("observed_at")
+    @classmethod
+    def observed_at_is_aware(cls, value: datetime) -> datetime:
+        return require_aware(value)
 
 
 class ScheduleRecord(SchedulingModel):

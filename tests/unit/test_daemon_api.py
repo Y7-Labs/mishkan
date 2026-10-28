@@ -6,7 +6,7 @@ import hashlib
 import stat
 import subprocess
 import time
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -27,6 +27,7 @@ from mishkan.daemon.bootstrap import DaemonPaths
 from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.domain.time import utc_now
 from mishkan.persistence import SQLiteApplicationRepository
+from mishkan.scheduling import DateTriggerSpec, ScheduleCreateRequest, ScheduleMissionRequest
 from mishkan.telemetry.models import (
     LangSmithFeedbackImportRequest,
     TelemetryDisclosure,
@@ -165,6 +166,135 @@ async def test_health_is_public_but_queries_require_authentication(tmp_path: Pat
 
 
 @pytest.mark.anyio
+async def test_schedule_commands_queries_and_snapshot_share_daemon_authority(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    paths = DaemonBootstrap().setup(config, principal_id="PM")
+    token = TokenFile(paths.token_file).read()
+    headers = {"Authorization": f"Bearer {token.token}"}
+    request = ScheduleCreateRequest(
+        mission=ScheduleMissionRequest(
+            project_id="project-a",
+            objective="Inspect the repository and report verified findings",
+        ),
+        trigger=DateTriggerSpec(run_at=datetime(2099, 1, 1, tzinfo=UTC)),
+    )
+    create = ApplicationCommand(
+        command_type="schedule.create",
+        actor_id=token.principal_id,
+        target_type="schedule",
+        target_id=str(request.schedule_id),
+        expected_revision=0,
+        payload={"request": request.model_dump(mode="json")},
+    )
+    transport = httpx.ASGITransport(app=create_app(config))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        created_response = await client.post(
+            "/v1/commands",
+            headers=headers,
+            json=create.model_dump(mode="json"),
+        )
+        assert created_response.status_code == 200
+        created = created_response.json()
+        assert created["status"] == "accepted"
+        assert created["revision"] == 1
+        assert created["payload"]["schedule"]["state"] == "active"
+
+        listed = await client.get("/v1/schedules", headers=headers)
+        assert listed.status_code == 200
+        assert [item["schedule_id"] for item in listed.json()] == [str(request.schedule_id)]
+
+        pause = ApplicationCommand(
+            command_type="schedule.pause",
+            actor_id=token.principal_id,
+            target_type="schedule",
+            target_id=str(request.schedule_id),
+            expected_revision=1,
+            payload={},
+        )
+        paused = await client.post(
+            "/v1/commands",
+            headers=headers,
+            json=pause.model_dump(mode="json"),
+        )
+        assert paused.status_code == 200
+        assert paused.json()["payload"]["schedule"]["state"] == "paused"
+        assert paused.json()["revision"] == 2
+
+        snapshot = await client.get("/v1/snapshot", headers=headers)
+        assert snapshot.status_code == 200
+        assert snapshot.json()["projections"]["scheduling"]["active"] == 0
+        assert snapshot.json()["projections"]["scheduling"]["occurrences"] == []
+
+
+@pytest.mark.anyio
+async def test_manual_schedule_occurrence_dispatches_through_governed_run_command(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "README.md").write_text("# Prospective scheduled fixture\n", encoding="utf-8")
+    config = _config(tmp_path)
+    paths = DaemonBootstrap().setup(config, principal_id="PM")
+    token = TokenFile(paths.token_file).read()
+    headers = {"Authorization": f"Bearer {token.token}"}
+    request = ScheduleCreateRequest(
+        mission=ScheduleMissionRequest(
+            project_id="project-a",
+            workspace_id="prospective:scheduled-fixture",
+            objective="Establish a governed prospective mission context",
+            outcome_id="scheduled-prospective-context",
+        ),
+        trigger=DateTriggerSpec(run_at=datetime(2099, 1, 1, tzinfo=UTC)),
+    )
+    transport = httpx.ASGITransport(app=create_app(config))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        create = ApplicationCommand(
+            command_type="schedule.create",
+            actor_id=token.principal_id,
+            target_type="schedule",
+            target_id=str(request.schedule_id),
+            expected_revision=0,
+            payload={"request": request.model_dump(mode="json")},
+        )
+        assert (
+            await client.post(
+                "/v1/commands",
+                headers=headers,
+                json=create.model_dump(mode="json"),
+            )
+        ).status_code == 200
+        run_now = ApplicationCommand(
+            command_type="schedule.run_now",
+            actor_id=token.principal_id,
+            target_type="schedule",
+            target_id=str(request.schedule_id),
+            expected_revision=1,
+            payload={},
+        )
+        response = await client.post(
+            "/v1/commands",
+            headers=headers,
+            json=run_now.model_dump(mode="json"),
+        )
+        assert response.status_code == 200
+        assert response.json()["payload"]["occurrence"]["state"] == "pending"
+
+        history: list[dict[str, object]] = []
+        for _ in range(100):
+            observed = await client.get(
+                f"/v1/schedules/{request.schedule_id}/history",
+                headers=headers,
+            )
+            history = observed.json()
+            if history and history[0]["state"] == "accepted":
+                break
+            await asyncio.sleep(0.01)
+        assert history[0]["state"] == "accepted"
+        assert history[0]["run_id"]
+        assert history[0]["attempt_count"] == 1
+
+
+@pytest.mark.anyio
 async def test_langsmith_feedback_enters_only_as_attributed_candidate_artifact(
     tmp_path: Path,
 ) -> None:
@@ -281,7 +411,7 @@ async def test_authenticated_command_and_event_query_share_durable_contract(
         "command_type": "system.checkpoint",
         "matched_rule_ids": ["local.application-commands"],
         "policy_fingerprint": event_payload["policy_fingerprint"],
-        "policy_revisions": ["bundled.local@30"],
+        "policy_revisions": ["bundled.local@31"],
         "request_schema_version": "1.0",
         "payload_fields": ["checkpoint"],
         "result_fields": ["recorded"],

@@ -172,6 +172,7 @@ from mishkan.repository.models import (
 from mishkan.runtime import TaskReviewRejection
 from mishkan.scheduling import (
     ScheduleCreateRequest,
+    ScheduleFireRequest,
     ScheduleMissionRequest,
     ScheduleOccurrence,
     ScheduleRecord,
@@ -360,6 +361,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "langsmith-feedback-import-request-v1.schema.json": LangSmithFeedbackImportRequest,
     "run-initialization-request-v1.schema.json": RunInitializationRequest,
     "schedule-create-request-v1.schema.json": ScheduleCreateRequest,
+    "schedule-fire-request-v1.schema.json": ScheduleFireRequest,
     "schedule-mission-request-v1.schema.json": ScheduleMissionRequest,
     "schedule-occurrence-v1.schema.json": ScheduleOccurrence,
     "schedule-record-v1.schema.json": ScheduleRecord,

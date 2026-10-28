@@ -215,6 +215,7 @@ def test_public_contract_catalogue_exports_deterministically(tmp_path: Path) -> 
         "repository-establishment-request-v1.schema.json",
         "repository-establishment-v1.schema.json",
         "schedule-create-request-v1.schema.json",
+        "schedule-fire-request-v1.schema.json",
         "schedule-mission-request-v1.schema.json",
         "schedule-occurrence-v1.schema.json",
         "schedule-record-v1.schema.json",

@@ -16,6 +16,7 @@
         "retry_waiting",
         "accepted",
         "misfired",
+        "coalesced",
         "overlap_blocked",
         "failed",
         "cancelled",

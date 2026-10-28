@@ -10,11 +10,13 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from mishkan.application import CommandResult
 from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.domain.identity import new_id
 from mishkan.domain.time import require_aware, utc_now
 from mishkan.persistence.migration import SchemaManager
 from mishkan.persistence.sqlite import (
+    CommandRow,
     OutboxRow,
     RunRow,
     ScheduleOccurrenceRow,
@@ -69,29 +71,27 @@ class SQLiteScheduleRepository:
             updated_at=now,
         )
         with Session(self._engine) as session, session.begin():
-            existing = session.get(ScheduleRow, str(request.schedule_id))
-            if existing is not None:
-                durable = self._schedule(existing)
-                if (
-                    durable.mission != request.mission
-                    or durable.trigger != request.trigger
-                    or durable.overlap_mode is not request.overlap_mode
-                    or durable.created_by != actor_id
-                    or durable.preauthorization_policy_fingerprint != policy_fingerprint
-                    or durable.next_fire_at != fire_at
-                ):
-                    raise MishkanError(
-                        ErrorCode.DUPLICATE_RESULT,
-                        "schedule identity already contains different content",
-                    )
-                return durable
-            session.add(self._schedule_row(record))
+            durable = self.create_in_session(session, record)
             self._event(
                 session,
-                aggregate_id=str(record.schedule_id),
+                aggregate_id=str(durable.schedule_id),
                 event_type="schedule.created",
-                payload=self._schedule_projection(record),
+                payload=self._schedule_projection(durable),
             )
+        return durable
+
+    def create_in_session(self, session: Session, record: ScheduleRecord) -> ScheduleRecord:
+        existing = session.get(ScheduleRow, str(record.schedule_id))
+        if existing is not None:
+            durable = self._schedule(existing)
+            if durable != record:
+                raise MishkanError(
+                    ErrorCode.DUPLICATE_RESULT,
+                    "schedule identity already contains different content",
+                )
+            return durable
+        session.add(self._schedule_row(record))
+        session.flush()
         return record
 
     def schedule(self, schedule_id: UUID) -> ScheduleRecord:
@@ -140,31 +140,14 @@ class SQLiteScheduleRepository:
         last_evaluated_at: datetime | None = None,
     ) -> ScheduleRecord:
         with Session(self._engine) as session, session.begin():
-            row = self._require_schedule(session, schedule_id)
-            current = self._schedule(row)
-            if current.revision != expected_revision:
-                raise MishkanError(
-                    ErrorCode.REVISION_MISMATCH,
-                    "schedule revision changed",
-                    details={"expected": expected_revision, "current": current.revision},
-                )
-            now = utc_now()
-            updated = current.model_copy(
-                update={
-                    "state": state,
-                    "next_fire_at": (
-                        require_aware(next_fire_at) if next_fire_at is not None else None
-                    ),
-                    "last_evaluated_at": (
-                        require_aware(last_evaluated_at)
-                        if last_evaluated_at is not None
-                        else current.last_evaluated_at
-                    ),
-                    "revision": current.revision + 1,
-                    "updated_at": now,
-                }
+            updated = self.update_schedule_in_session(
+                session,
+                schedule_id,
+                expected_revision=expected_revision,
+                state=state,
+                next_fire_at=next_fire_at,
+                last_evaluated_at=last_evaluated_at,
             )
-            self._write_schedule(row, updated)
             self._event(
                 session,
                 aggregate_id=str(schedule_id),
@@ -172,6 +155,41 @@ class SQLiteScheduleRepository:
                 payload=self._schedule_projection(updated),
             )
             return updated
+
+    def update_schedule_in_session(
+        self,
+        session: Session,
+        schedule_id: UUID,
+        *,
+        expected_revision: int,
+        state: ScheduleState,
+        next_fire_at: datetime | None,
+        last_evaluated_at: datetime | None = None,
+    ) -> ScheduleRecord:
+        row = self._require_schedule(session, schedule_id)
+        current = self._schedule(row)
+        if current.revision != expected_revision:
+            raise MishkanError(
+                ErrorCode.REVISION_MISMATCH,
+                "schedule revision changed",
+                details={"expected": expected_revision, "current": current.revision},
+            )
+        updated = current.model_copy(
+            update={
+                "state": state,
+                "next_fire_at": (require_aware(next_fire_at) if next_fire_at is not None else None),
+                "last_evaluated_at": (
+                    require_aware(last_evaluated_at)
+                    if last_evaluated_at is not None
+                    else current.last_evaluated_at
+                ),
+                "revision": current.revision + 1,
+                "updated_at": utc_now(),
+            }
+        )
+        self._write_schedule(row, updated)
+        session.flush()
+        return updated
 
     def create_occurrence(
         self,
@@ -194,37 +212,55 @@ class SQLiteScheduleRepository:
             updated_at=now,
         )
         with Session(self._engine) as session, session.begin():
-            self._require_schedule(session, schedule.schedule_id)
-            existing = session.scalar(
-                select(ScheduleOccurrenceRow).where(
-                    ScheduleOccurrenceRow.schedule_id == str(schedule.schedule_id),
-                    ScheduleOccurrenceRow.occurrence_key == occurrence_key,
-                )
-            )
-            if existing is not None:
-                durable = self._occurrence(existing)
-                if (
-                    durable.scheduled_for != instant
-                    or durable.source is not source
-                    or durable.schedule_id != schedule.schedule_id
-                ):
-                    raise MishkanError(
-                        ErrorCode.DUPLICATE_RESULT,
-                        "schedule occurrence key already contains different content",
-                    )
-                return durable
-            session.add(self._occurrence_row(occurrence))
+            durable = self.create_occurrence_in_session(session, occurrence)
             self._event(
                 session,
                 aggregate_id=str(schedule.schedule_id),
                 event_type="schedule.occurrence_created",
-                payload=self._occurrence_projection(occurrence),
+                payload=self._occurrence_projection(durable),
             )
+        return durable
+
+    def create_occurrence_in_session(
+        self,
+        session: Session,
+        occurrence: ScheduleOccurrence,
+    ) -> ScheduleOccurrence:
+        self._require_schedule(session, occurrence.schedule_id)
+        existing = session.scalar(
+            select(ScheduleOccurrenceRow).where(
+                ScheduleOccurrenceRow.schedule_id == str(occurrence.schedule_id),
+                ScheduleOccurrenceRow.occurrence_key == occurrence.occurrence_key,
+            )
+        )
+        if existing is not None:
+            durable = self._occurrence(existing)
+            if (
+                durable.scheduled_for != occurrence.scheduled_for
+                or durable.schedule_id != occurrence.schedule_id
+            ):
+                raise MishkanError(
+                    ErrorCode.DUPLICATE_RESULT,
+                    "schedule occurrence key already contains different content",
+                )
+            return durable
+        session.add(self._occurrence_row(occurrence))
+        session.flush()
         return occurrence
+
+    def schedule_in_session(self, session: Session, schedule_id: UUID) -> ScheduleRecord:
+        return self._schedule(self._require_schedule(session, schedule_id))
 
     def occurrence(self, occurrence_id: UUID) -> ScheduleOccurrence:
         with Session(self._engine) as session:
             return self._occurrence(self._require_occurrence(session, occurrence_id))
+
+    def application_result(self, command_id: UUID) -> CommandResult | None:
+        with Session(self._engine) as session:
+            row = session.get(CommandRow, str(command_id))
+            return (
+                CommandResult.model_validate_json(row.result_payload) if row is not None else None
+            )
 
     def occurrences(
         self,
@@ -326,6 +362,7 @@ class SQLiteScheduleRepository:
             OccurrenceState.ACCEPTED,
             OccurrenceState.RETRY_WAITING,
             OccurrenceState.MISFIRED,
+            OccurrenceState.COALESCED,
             OccurrenceState.OVERLAP_BLOCKED,
             OccurrenceState.FAILED,
             OccurrenceState.CANCELLED,
@@ -338,6 +375,7 @@ class SQLiteScheduleRepository:
             if current.state in {
                 OccurrenceState.ACCEPTED,
                 OccurrenceState.MISFIRED,
+                OccurrenceState.COALESCED,
                 OccurrenceState.OVERLAP_BLOCKED,
                 OccurrenceState.FAILED,
                 OccurrenceState.CANCELLED,
@@ -398,9 +436,9 @@ class SQLiteScheduleRepository:
             return active is not None
 
     @staticmethod
-    def occurrence_key(schedule_id: UUID, scheduled_for: datetime, source: OccurrenceSource) -> str:
+    def occurrence_key(schedule_id: UUID, scheduled_for: datetime) -> str:
         instant = require_aware(scheduled_for).isoformat()
-        return f"{source.value}:{schedule_id}:{instant}"
+        return f"scheduled:{schedule_id}:{instant}"
 
     @staticmethod
     def _schedule(row: ScheduleRow) -> ScheduleRecord:

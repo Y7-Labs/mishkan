@@ -188,6 +188,15 @@ from mishkan.repository import (
     RepositoryInspector,
 )
 from mishkan.runtime import TaskReviewRejection
+from mishkan.scheduling import (
+    OccurrenceState,
+    ScheduleDriver,
+    ScheduleOccurrence,
+    ScheduleRecord,
+    ScheduleState,
+    SQLiteScheduleRepository,
+)
+from mishkan.scheduling.service import ScheduleMutationResult, ScheduleMutationService
 from mishkan.skills import SkillInspectionProfileLoader, SkillPackageInspector
 from mishkan.skills.catalog import validate_skill_metadata_document
 from mishkan.skills.learning import SkillLearningRunner, SkillLearningService
@@ -469,6 +478,20 @@ def create_app(
         paths.database,
         busy_timeout_ms=persistence.busy_timeout_ms,
         content_inspector=content_inspector,
+    )
+    scheduling_config = config.scheduling
+    schedule_repository = (
+        SQLiteScheduleRepository(
+            paths.database,
+            busy_timeout_ms=persistence.busy_timeout_ms,
+        )
+        if scheduling_config is not None
+        else None
+    )
+    schedule_mutations = (
+        ScheduleMutationService(scheduling_config, schedule_repository)
+        if scheduling_config is not None and schedule_repository is not None
+        else None
     )
     artifacts = DurableArtifactService(
         paths.database,
@@ -789,6 +812,7 @@ def create_app(
     )
     notification_service = NotificationService(config.notifications)
     telemetry_tasks: set[asyncio.Task[object]] = set()
+    schedule_driver: ScheduleDriver | None = None
 
     def project_telemetry(
         command: ApplicationCommand,
@@ -902,7 +926,7 @@ def create_app(
 
             async with command_lock:
                 try:
-                    return repository.accept_with_mutation(
+                    result = repository.accept_with_mutation(
                         command,
                         target_id=command.target_id,
                         event_type=f"registry.entry_{mutation.action.value}",
@@ -922,6 +946,121 @@ def create_app(
                             "error_code": error.envelope.code,
                         },
                     )
+        if command.command_type.startswith("schedule."):
+            if schedule_repository is None or schedule_mutations is None:
+                raise MishkanError(
+                    ErrorCode.REQUIRED_DEPENDENCY,
+                    "scheduling capability is not configured",
+                )
+            if command.target_id is None:
+                raise MishkanError(ErrorCode.OUTPUT_CONTRACT, "schedule identity is absent")
+            schedule_id = UUID(command.target_id)
+
+            def apply_schedule_mutation(
+                session: Session, next_revision: int
+            ) -> tuple[dict[str, object], dict[str, object]]:
+                mutation: ScheduleMutationResult
+                if command.command_type == "schedule.create":
+                    if authorized.schedule_create is None:
+                        raise MishkanError(
+                            ErrorCode.OUTPUT_CONTRACT,
+                            "authorized schedule create request is absent",
+                        )
+                    mutation = schedule_mutations.create(
+                        session,
+                        authorized.schedule_create,
+                        actor_id=command.actor_id,
+                        policy_fingerprint=authorized.decision.policy_fingerprint,
+                        revision=next_revision,
+                    )
+                elif command.command_type == "schedule.pause":
+                    mutation = schedule_mutations.transition(
+                        session,
+                        schedule_id,
+                        state=ScheduleState.PAUSED,
+                        expected_revision=next_revision - 1,
+                    )
+                elif command.command_type == "schedule.resume":
+                    mutation = schedule_mutations.transition(
+                        session,
+                        schedule_id,
+                        state=ScheduleState.ACTIVE,
+                        expected_revision=next_revision - 1,
+                    )
+                elif command.command_type == "schedule.remove":
+                    mutation = schedule_mutations.transition(
+                        session,
+                        schedule_id,
+                        state=ScheduleState.REMOVED,
+                        expected_revision=next_revision - 1,
+                    )
+                elif command.command_type == "schedule.run_now":
+                    mutation = schedule_mutations.run_now(
+                        session,
+                        schedule_id,
+                        command_id=command.command_id,
+                        expected_revision=next_revision - 1,
+                    )
+                elif command.command_type == "schedule.trigger":
+                    if authorized.schedule_fire is None:
+                        raise MishkanError(
+                            ErrorCode.OUTPUT_CONTRACT,
+                            "authorized schedule fire request is absent",
+                        )
+                    mutation = schedule_mutations.fire(
+                        session,
+                        schedule_id,
+                        authorized.schedule_fire,
+                        expected_revision=next_revision - 1,
+                    )
+                else:  # pragma: no cover - command registry prevents this branch
+                    raise MishkanError(ErrorCode.OUTPUT_CONTRACT, "unknown schedule command")
+                payload = mutation.payload()
+                return payload, {
+                    "schedule_id": str(mutation.schedule.schedule_id),
+                    "schedule_state": mutation.schedule.state.value,
+                    "occurrence_id": (
+                        str(mutation.occurrence.occurrence_id)
+                        if mutation.occurrence is not None
+                        else None
+                    ),
+                    **_authorization_projection(authorized),
+                }
+
+            async with command_lock:
+                try:
+                    event_types = {
+                        "schedule.create": "schedule.created",
+                        "schedule.pause": "schedule.paused",
+                        "schedule.resume": "schedule.resumed",
+                        "schedule.remove": "schedule.removed",
+                        "schedule.run_now": "schedule.run_now_requested",
+                        "schedule.trigger": "schedule.triggered",
+                    }
+                    result = repository.accept_with_mutation(
+                        command,
+                        target_id=command.target_id,
+                        event_type=event_types[command.command_type],
+                        mutation=apply_schedule_mutation,
+                        source="mishkand.scheduling",
+                    )
+                except MishkanError as error:
+                    return repository.refuse(
+                        command,
+                        target_id=command.target_id,
+                        error=error,
+                        event_payload={
+                            "command_type": command.command_type,
+                            **_authorization_projection(authorized),
+                            "error_code": error.envelope.code,
+                        },
+                    )
+            raw_occurrence = result.payload.get("occurrence")
+            if schedule_driver is not None and isinstance(raw_occurrence, dict):
+                occurrence = ScheduleOccurrence.model_validate(raw_occurrence)
+                if occurrence.state is OccurrenceState.PENDING:
+                    schedule_driver.enqueue(occurrence.occurrence_id)
+            return result
         resolved_credentials = _resolve_command_credentials(
             authorized,
             credential_resolver,
@@ -1168,6 +1307,17 @@ def create_app(
                 task.add_done_callback(forget_effect)
         return await asyncio.shield(task)
 
+    if (
+        scheduling_config is not None
+        and scheduling_config.enabled
+        and schedule_repository is not None
+    ):
+        schedule_driver = ScheduleDriver(
+            scheduling_config,
+            schedule_repository,
+            execute_command,
+        )
+
     mcp_http: McpHttpFacade | None = None
     if mcp_config is not None and mcp_config.facade.enabled:
         schema_revision = SchemaManager(paths.database).status().head_revision
@@ -1200,12 +1350,16 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         try:
+            if schedule_driver is not None:
+                schedule_driver.start()
             if mcp_http is None:
                 yield
                 return
             async with mcp_http.lifespan():
                 yield
         finally:
+            if schedule_driver is not None:
+                await schedule_driver.stop()
             for task in telemetry_tasks:
                 task.cancel()
             if mcp_runner is not None:
@@ -1262,33 +1416,90 @@ def create_app(
         _principal: TokenRecord = authenticated,
     ) -> SnapshotEnvelope:
         current = await _thread_call(repository.snapshot, limit=daemon.event_page_limit)
-        if knowledge_repository is None or config.knowledge is None:
-            return current
-        operations = await _thread_call(
-            knowledge_repository.list_operations,
-            limit=daemon.event_page_limit,
-        )
-        corpora = await _thread_call(
-            knowledge_repository.list_corpora,
-            limit=daemon.event_page_limit,
-        )
-        queries = await _thread_call(
-            knowledge_repository.list_queries,
-            limit=daemon.event_page_limit,
-        )
-        source_health = await _thread_call(
-            knowledge_repository.source_health,
-            limit=daemon.event_page_limit,
-        )
         projections = dict(current.projections)
-        projections["knowledge"] = {
-            "sources": _knowledge_source_projection(config, source_health),
-            "operations": [item.model_dump(mode="json") for item in operations],
-            "corpora": [item.model_dump(mode="json") for item in corpora],
-            "degraded": any(item.state.value in {"degraded", "failed"} for item in corpora)
-            or any(item.state is KnowledgeQueryState.DEGRADED for item in queries),
-        }
+        if schedule_repository is not None:
+            schedules = await _thread_call(
+                schedule_repository.list_schedules,
+                limit=daemon.event_page_limit,
+            )
+            history = await _thread_call(
+                schedule_repository.occurrences,
+                limit=daemon.event_page_limit,
+            )
+            projections["scheduling"] = {
+                "schedules": [item.model_dump(mode="json") for item in schedules],
+                "occurrences": [item.model_dump(mode="json") for item in history],
+                "active": sum(item.state is ScheduleState.ACTIVE for item in schedules),
+            }
+        if knowledge_repository is not None and config.knowledge is not None:
+            operations = await _thread_call(
+                knowledge_repository.list_operations,
+                limit=daemon.event_page_limit,
+            )
+            corpora = await _thread_call(
+                knowledge_repository.list_corpora,
+                limit=daemon.event_page_limit,
+            )
+            queries = await _thread_call(
+                knowledge_repository.list_queries,
+                limit=daemon.event_page_limit,
+            )
+            source_health = await _thread_call(
+                knowledge_repository.source_health,
+                limit=daemon.event_page_limit,
+            )
+            projections["knowledge"] = {
+                "sources": _knowledge_source_projection(config, source_health),
+                "operations": [item.model_dump(mode="json") for item in operations],
+                "corpora": [item.model_dump(mode="json") for item in corpora],
+                "degraded": any(item.state.value in {"degraded", "failed"} for item in corpora)
+                or any(item.state is KnowledgeQueryState.DEGRADED for item in queries),
+            }
         return current.model_copy(update={"projections": projections})
+
+    @app.get("/v1/schedules", response_model=None)
+    async def schedules(
+        _principal: TokenRecord = authenticated,
+        state: ScheduleState | None = None,
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=10_000)] = 100,
+    ) -> tuple[dict[str, object], ...]:
+        if schedule_repository is None:
+            raise MishkanError(ErrorCode.REQUIRED_DEPENDENCY, "scheduling is not configured")
+        records = await _thread_call(
+            schedule_repository.list_schedules,
+            state=state,
+            offset=offset,
+            limit=limit,
+        )
+        return tuple(record.model_dump(mode="json") for record in records)
+
+    @app.get("/v1/schedules/{schedule_id}", response_model=ScheduleRecord)
+    async def schedule_get(
+        schedule_id: UUID,
+        _principal: TokenRecord = authenticated,
+    ) -> ScheduleRecord:
+        if schedule_repository is None:
+            raise MishkanError(ErrorCode.REQUIRED_DEPENDENCY, "scheduling is not configured")
+        return await _thread_call(schedule_repository.schedule, schedule_id)
+
+    @app.get("/v1/schedules/{schedule_id}/history", response_model=None)
+    async def schedule_history(
+        schedule_id: UUID,
+        _principal: TokenRecord = authenticated,
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=10_000)] = 100,
+    ) -> tuple[dict[str, object], ...]:
+        if schedule_repository is None:
+            raise MishkanError(ErrorCode.REQUIRED_DEPENDENCY, "scheduling is not configured")
+        await _thread_call(schedule_repository.schedule, schedule_id)
+        records = await _thread_call(
+            schedule_repository.occurrences,
+            schedule_id=schedule_id,
+            offset=offset,
+            limit=limit,
+        )
+        return tuple(record.model_dump(mode="json") for record in records)
 
     @app.get("/v1/telemetry/status")
     async def telemetry_status(

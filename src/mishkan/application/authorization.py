@@ -95,6 +95,7 @@ from mishkan.policy import (
     PolicyLoader,
     ResourceRequest,
 )
+from mishkan.scheduling import ScheduleCreateRequest, ScheduleFireRequest
 from mishkan.skills.models import (
     SkillInvocationRequest,
     SkillLearningRequest,
@@ -149,6 +150,24 @@ COMMAND_SEMANTICS = MappingProxyType(
         "run.cancel": CommandSemantics("application.run.control", "coordination", ("run.cancel",)),
         "run.recover": CommandSemantics(
             "application.run.control", "coordination", ("run.recover",)
+        ),
+        "schedule.create": CommandSemantics(
+            "application.schedule.manage", "coordination", ("schedule.create",)
+        ),
+        "schedule.pause": CommandSemantics(
+            "application.schedule.manage", "coordination", ("schedule.pause",)
+        ),
+        "schedule.resume": CommandSemantics(
+            "application.schedule.manage", "coordination", ("schedule.resume",)
+        ),
+        "schedule.remove": CommandSemantics(
+            "application.schedule.manage", "coordination", ("schedule.remove",)
+        ),
+        "schedule.run_now": CommandSemantics(
+            "application.schedule.trigger", "coordination", ("schedule.run_now",)
+        ),
+        "schedule.trigger": CommandSemantics(
+            "application.schedule.trigger", "coordination", ("schedule.trigger",)
         ),
         "artifact.upload.open": CommandSemantics(
             "application.artifact.upload", "artifact", ("artifact.stage",)
@@ -427,6 +446,12 @@ _COMMAND_TARGETS = MappingProxyType(
         "run.repository.establish": ("run", "required"),
         "run.cancel": ("run", "required"),
         "run.recover": ("run", "required"),
+        "schedule.create": ("schedule", "uuid"),
+        "schedule.pause": ("schedule", "uuid"),
+        "schedule.resume": ("schedule", "uuid"),
+        "schedule.remove": ("schedule", "uuid"),
+        "schedule.run_now": ("schedule", "uuid"),
+        "schedule.trigger": ("schedule", "uuid"),
         "artifact.upload.open": ("artifact_service", "absent"),
         "artifact.upload.chunk": ("artifact_upload", "uuid"),
         "artifact.upload.commit": ("artifact_upload", "uuid"),
@@ -534,6 +559,12 @@ _COMMAND_PAYLOAD_FIELDS = MappingProxyType(
         ),
         "run.cancel": (frozenset(), frozenset()),
         "run.recover": (frozenset(), frozenset()),
+        "schedule.create": (frozenset({"request"}), frozenset()),
+        "schedule.pause": (frozenset(), frozenset()),
+        "schedule.resume": (frozenset(), frozenset()),
+        "schedule.remove": (frozenset(), frozenset()),
+        "schedule.run_now": (frozenset(), frozenset()),
+        "schedule.trigger": (frozenset({"request"}), frozenset()),
         "artifact.upload.open": (
             frozenset({"expected_size", "expected_digest", "media_type", "provenance"}),
             frozenset({"sensitivity", "retention"}),
@@ -712,6 +743,8 @@ class AuthorizedApplicationCommand:
     knowledge_memory_capture: KnowledgeMemoryCaptureRequest | None = None
     knowledge_promotion: KnowledgePromotion | None = None
     knowledge_promotion_decision: KnowledgePromotionDecision | None = None
+    schedule_create: ScheduleCreateRequest | None = None
+    schedule_fire: ScheduleFireRequest | None = None
 
 
 class ApplicationCommandAuthority:
@@ -809,6 +842,8 @@ class ApplicationCommandAuthority:
         knowledge_memory_capture: KnowledgeMemoryCaptureRequest | None = None
         knowledge_promotion: KnowledgePromotion | None = None
         knowledge_promotion_decision: KnowledgePromotionDecision | None = None
+        schedule_create: ScheduleCreateRequest | None = None
+        schedule_fire: ScheduleFireRequest | None = None
 
         try:
             if normalized.command_type == "run.initialize":
@@ -820,6 +855,26 @@ class ApplicationCommandAuthority:
                 external_resources = (
                     f"prospective-workspace:{prospective_run_request.workspace_id}",
                 )
+            elif normalized.command_type == "schedule.create":
+                schedule_create = ScheduleCreateRequest.model_validate(
+                    normalized.payload["request"]
+                )
+                if normalized.target_id != str(schedule_create.schedule_id):
+                    raise MishkanError(
+                        ErrorCode.OUTPUT_CONTRACT,
+                        "schedule target differs from its typed request identity",
+                    )
+                external_resources = (
+                    f"project:{schedule_create.mission.project_id}",
+                    schedule_create.mission.target_key,
+                )
+                if schedule_create.overlap_mode.value == "allow":
+                    effects = (*effects, "schedule.overlap.allow")
+            elif normalized.command_type == "schedule.trigger":
+                schedule_fire = ScheduleFireRequest.model_validate(normalized.payload["request"])
+                external_resources = (f"schedule:{normalized.target_id}",)
+            elif normalized.command_type.startswith("schedule."):
+                external_resources = (f"schedule:{normalized.target_id}",)
             elif normalized.command_type == "run.repository.establish":
                 repository_establishment_request = RepositoryEstablishmentRequest.model_validate(
                     normalized.payload
@@ -2010,6 +2065,8 @@ class ApplicationCommandAuthority:
             knowledge_memory_capture=knowledge_memory_capture,
             knowledge_promotion=knowledge_promotion,
             knowledge_promotion_decision=knowledge_promotion_decision,
+            schedule_create=schedule_create,
+            schedule_fire=schedule_fire,
         )
 
     @staticmethod

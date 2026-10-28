@@ -136,6 +136,7 @@
     "repository-establishment-v1.schema.json",
     "run-initialization-request-v1.schema.json",
     "schedule-create-request-v1.schema.json",
+    "schedule-fire-request-v1.schema.json",
     "schedule-mission-request-v1.schema.json",
     "schedule-occurrence-v1.schema.json",
     "schedule-record-v1.schema.json",

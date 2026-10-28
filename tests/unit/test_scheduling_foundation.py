@@ -6,19 +6,28 @@ from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.orm import Session
 
+from mishkan.application import CommandResult, CommandStatus
+from mishkan.config.models import SchedulingConfig
 from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.persistence import SchemaManager
+from mishkan.persistence.sqlite import create_local_engine
 from mishkan.scheduling import (
     CronTriggerSpec,
     DateTriggerSpec,
     OccurrenceSource,
     OccurrenceState,
     ScheduleCreateRequest,
+    ScheduleExportTarget,
+    ScheduleFireRequest,
     ScheduleMissionRequest,
     ScheduleState,
     SQLiteScheduleRepository,
+    render_schedule_export,
 )
+from mishkan.scheduling.driver import ScheduleDriver
+from mishkan.scheduling.service import ScheduleMutationService
 
 
 def _repository(tmp_path: Path) -> SQLiteScheduleRepository:
@@ -36,6 +45,26 @@ def _request(*, run_at: datetime | None = None) -> ScheduleCreateRequest:
         ),
         trigger=DateTriggerSpec(run_at=run_at or datetime(2030, 1, 1, tzinfo=UTC)),
     )
+
+
+def _scheduling_config(*, coalesce: bool = True, grace: int = 600) -> SchedulingConfig:
+    return SchedulingConfig(
+        enabled=True,
+        poll_seconds=1,
+        misfire_grace_seconds=grace,
+        coalesce=coalesce,
+        max_catch_up_occurrences=100,
+        max_attempts=3,
+        retry_initial_seconds=1,
+        retry_multiplier=2,
+        retry_max_seconds=60,
+        history_page_limit=100,
+    )
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
 
 
 def test_schedule_contract_rejects_ambiguous_time_and_cron() -> None:
@@ -161,3 +190,203 @@ def test_schedule_revision_prevents_stale_control(tmp_path: Path) -> None:
             event_type="schedule.removed",
         )
     assert stale.value.envelope.code is ErrorCode.REVISION_MISMATCH
+
+
+def test_schedule_mutation_atomically_records_due_one_shot(tmp_path: Path) -> None:
+    database = tmp_path / "mishkan.db"
+    SchemaManager(database).initialize()
+    repository = SQLiteScheduleRepository(database)
+    service = ScheduleMutationService(_scheduling_config(), repository)
+    request = _request(run_at=datetime(2030, 1, 1, tzinfo=UTC))
+    engine = create_local_engine(database)
+    with Session(engine) as session, session.begin():
+        created = service.create(
+            session,
+            request,
+            actor_id="operator",
+            policy_fingerprint="d" * 64,
+            revision=1,
+            now=datetime(2029, 1, 1, tzinfo=UTC),
+        ).schedule
+    with Session(engine) as session, session.begin():
+        result = service.fire(
+            session,
+            created.schedule_id,
+            ScheduleFireRequest(
+                source=OccurrenceSource.INTERNAL,
+                observed_at=datetime(2030, 1, 1, 0, 1, tzinfo=UTC),
+            ),
+            expected_revision=1,
+        )
+    assert result.schedule.state is ScheduleState.COMPLETED
+    assert result.schedule.next_fire_at is None
+    assert result.occurrence is not None
+    assert result.occurrence.state is OccurrenceState.PENDING
+    assert repository.occurrence(result.occurrence.occurrence_id) == result.occurrence
+
+
+def test_cron_coalesces_missed_slots_and_preserves_visible_history(tmp_path: Path) -> None:
+    database = tmp_path / "mishkan.db"
+    SchemaManager(database).initialize()
+    repository = SQLiteScheduleRepository(database)
+    service = ScheduleMutationService(_scheduling_config(coalesce=True), repository)
+    request = ScheduleCreateRequest(
+        mission=ScheduleMissionRequest(project_id="project-a", objective="Run checks"),
+        trigger=CronTriggerSpec(expression="* * * * *", timezone="UTC"),
+    )
+    engine = create_local_engine(database)
+    with Session(engine) as session, session.begin():
+        created = service.create(
+            session,
+            request,
+            actor_id="operator",
+            policy_fingerprint="e" * 64,
+            revision=1,
+            now=datetime(2029, 12, 31, 23, 59, 30, tzinfo=UTC),
+        ).schedule
+    with Session(engine) as session, session.begin():
+        result = service.fire(
+            session,
+            created.schedule_id,
+            ScheduleFireRequest(
+                source=OccurrenceSource.EXTERNAL,
+                observed_at=datetime(2030, 1, 1, 0, 3, 10, tzinfo=UTC),
+            ),
+            expected_revision=1,
+        )
+    assert len(result.coalesced) == 3
+    assert all(item.state is OccurrenceState.COALESCED for item in result.coalesced)
+    assert result.occurrence is not None
+    assert result.occurrence.scheduled_for == datetime(2030, 1, 1, 0, 3, tzinfo=UTC)
+    assert result.schedule.next_fire_at == datetime(2030, 1, 1, 0, 4, tzinfo=UTC)
+
+
+def test_schedule_misfire_is_terminal_and_never_dispatched(tmp_path: Path) -> None:
+    database = tmp_path / "mishkan.db"
+    SchemaManager(database).initialize()
+    repository = SQLiteScheduleRepository(database)
+    service = ScheduleMutationService(_scheduling_config(grace=1), repository)
+    request = _request(run_at=datetime(2030, 1, 1, tzinfo=UTC))
+    engine = create_local_engine(database)
+    with Session(engine) as session, session.begin():
+        created = service.create(
+            session,
+            request,
+            actor_id="operator",
+            policy_fingerprint="f" * 64,
+            revision=1,
+            now=datetime(2029, 1, 1, tzinfo=UTC),
+        ).schedule
+    with Session(engine) as session, session.begin():
+        result = service.fire(
+            session,
+            created.schedule_id,
+            ScheduleFireRequest(
+                source=OccurrenceSource.INTERNAL,
+                observed_at=datetime(2030, 1, 1, 0, 0, 2, tzinfo=UTC),
+            ),
+            expected_revision=1,
+        )
+    assert result.occurrence is not None
+    assert result.occurrence.state is OccurrenceState.MISFIRED
+    assert result.occurrence.error_code == ErrorCode.SCHEDULE
+
+
+@pytest.mark.anyio
+async def test_driver_journals_command_before_retryable_dispatch(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    request = _request()
+    schedule = repository.create(
+        request,
+        actor_id="operator",
+        policy_fingerprint="a" * 64,
+        next_fire_at=request.trigger.run_at,
+    )
+    occurrence = repository.create_occurrence(
+        schedule,
+        occurrence_key="manual:retry",
+        source=OccurrenceSource.MANUAL,
+        scheduled_for=request.trigger.run_at,
+    )
+    observed_commands = []
+
+    async def execute(command: object, principal_id: str) -> CommandResult:
+        from mishkan.application import ApplicationCommand
+
+        assert isinstance(command, ApplicationCommand)
+        durable = repository.occurrence(occurrence.occurrence_id)
+        assert durable.state is OccurrenceState.DISPATCHING
+        assert durable.run_command_id == command.command_id
+        assert principal_id == "operator"
+        observed_commands.append(command)
+        error = MishkanError(
+            ErrorCode.OPTIONAL_DEPENDENCY,
+            "temporary model dependency failure",
+            retryable=True,
+        )
+        return CommandResult(
+            command_id=command.command_id,
+            status=CommandStatus.REFUSED,
+            target_type="run",
+            target_id="local-instance",
+            error=error.envelope,
+        )
+
+    driver = ScheduleDriver(_scheduling_config(), repository, execute)
+    await driver.dispatch(occurrence.occurrence_id)
+
+    settled = repository.occurrence(occurrence.occurrence_id)
+    assert len(observed_commands) == 1
+    assert settled.state is OccurrenceState.RETRY_WAITING
+    assert settled.attempt_count == 1
+    assert settled.next_attempt_at is not None
+
+
+@pytest.mark.anyio
+async def test_driver_marks_unprovable_interrupted_dispatch_uncertain(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    request = _request()
+    schedule = repository.create(
+        request,
+        actor_id="operator",
+        policy_fingerprint="b" * 64,
+        next_fire_at=request.trigger.run_at,
+    )
+    occurrence = repository.create_occurrence(
+        schedule,
+        occurrence_key="manual:interrupted",
+        source=OccurrenceSource.MANUAL,
+        scheduled_for=request.trigger.run_at,
+    )
+    repository.claim_dispatch(occurrence.occurrence_id, run_command_id=uuid4())
+
+    async def should_not_execute(_command: object, _principal_id: str) -> CommandResult:
+        raise AssertionError("restart reconciliation must not replay an unproven effect")
+
+    driver = ScheduleDriver(_scheduling_config(), repository, should_not_execute)
+    await driver.reconcile()
+
+    settled = repository.occurrence(occurrence.occurrence_id)
+    assert settled.state is OccurrenceState.UNCERTAIN
+    assert settled.error_code == ErrorCode.RUN_INTERRUPTED
+
+
+def test_os_exports_invoke_the_same_daemon_trigger_surface(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    request = ScheduleCreateRequest(
+        mission=ScheduleMissionRequest(project_id="project-a", objective="Run checks"),
+        trigger=CronTriggerSpec(expression="5 * * * *", timezone="Africa/Ouagadougou"),
+    )
+    schedule = repository.create(
+        request,
+        actor_id="operator",
+        policy_fingerprint="c" * 64,
+        next_fire_at=datetime(2030, 1, 1, 0, 5, tzinfo=UTC),
+    )
+    for target in ScheduleExportTarget:
+        rendered = render_schedule_export(schedule, target)
+        assert f"schedule trigger {schedule.schedule_id}" in rendered or (
+            "<string>schedule</string><string>trigger</string>" in rendered
+            and f"<string>{schedule.schedule_id}</string>" in rendered
+        )
+        assert "run.initialize" not in rendered
