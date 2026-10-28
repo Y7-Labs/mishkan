@@ -1402,6 +1402,82 @@
       "title": "ProviderConfig",
       "type": "object"
     },
+    "SchedulingConfig": {
+      "additionalProperties": false,
+      "description": "Public operational bounds for the daemon-local scheduling driver.",
+      "properties": {
+        "coalesce": {
+          "title": "Coalesce",
+          "type": "boolean"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "history_page_limit": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "History Page Limit",
+          "type": "integer"
+        },
+        "max_attempts": {
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Attempts",
+          "type": "integer"
+        },
+        "max_catch_up_occurrences": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Max Catch Up Occurrences",
+          "type": "integer"
+        },
+        "misfire_grace_seconds": {
+          "maximum": 604800,
+          "minimum": 1,
+          "title": "Misfire Grace Seconds",
+          "type": "integer"
+        },
+        "poll_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 60,
+          "title": "Poll Seconds",
+          "type": "number"
+        },
+        "retry_initial_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 86400,
+          "title": "Retry Initial Seconds",
+          "type": "number"
+        },
+        "retry_max_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 604800,
+          "title": "Retry Max Seconds",
+          "type": "number"
+        },
+        "retry_multiplier": {
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Retry Multiplier",
+          "type": "number"
+        }
+      },
+      "required": [
+        "poll_seconds",
+        "misfire_grace_seconds",
+        "coalesce",
+        "max_catch_up_occurrences",
+        "max_attempts",
+        "retry_initial_seconds",
+        "retry_multiplier",
+        "retry_max_seconds",
+        "history_page_limit"
+      ],
+      "title": "SchedulingConfig",
+      "type": "object"
+    },
     "SearchStrategy": {
       "enum": [
         "direct",
@@ -2524,6 +2600,17 @@
       "minProperties": 1,
       "title": "Providers",
       "type": "object"
+    },
+    "scheduling": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SchedulingConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "schema_version": {
       "title": "Schema Version",

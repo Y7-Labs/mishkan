@@ -78,7 +78,7 @@ def test_every_packaged_preset_declares_explicit_knowledge_selection(tmp_path: P
         source = tmp_path / f"{name}.yaml"
         source.write_text(preset_text(name), encoding="utf-8")
         config = ConfigLoader().load([source]).value
-        assert config.schema_version == "1.6"
+        assert config.schema_version == "1.7"
         assert config.knowledge is not None
         assert config.knowledge.selection_order[KnowledgeClass.LITERAL] == ("literal-native",)
 

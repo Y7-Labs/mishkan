@@ -30,7 +30,7 @@ def test_explicit_config_migration_adds_public_integration_surfaces(tmp_path: Pa
     migrate_to_latest(source)
     config = ConfigLoader().load([source]).value
 
-    assert config.schema_version == "1.6"
+    assert config.schema_version == "1.7"
     assert config.web is not None
     assert config.browser is not None
     assert config.mcp is not None
@@ -51,7 +51,7 @@ def test_latest_migration_can_cross_both_explicit_previous_versions(tmp_path: Pa
     migrate_to_latest(source)
     config = ConfigLoader().load([source]).value
 
-    assert config.schema_version == "1.6"
+    assert config.schema_version == "1.7"
     assert config.daemon is not None
     assert config.web is not None
     assert config.skills is not None
@@ -65,7 +65,7 @@ def test_latest_migration_adds_skills_to_schema_1_3(tmp_path: Path) -> None:
     migrate_to_latest(source)
     config = ConfigLoader().load([source]).value
 
-    assert config.schema_version == "1.6"
+    assert config.schema_version == "1.7"
     assert config.web is not None
     assert config.skills is not None
     assert config.knowledge is not None
@@ -78,7 +78,7 @@ def test_latest_migration_adds_engineering_profile_to_schema_1_4(tmp_path: Path)
     migrate_to_latest(source)
     config = ConfigLoader().load([source]).value
 
-    assert config.schema_version == "1.6"
+    assert config.schema_version == "1.7"
     assert config.skills is not None
     assert config.engineering_profile == "package://mishkan.resources.environment/default.yaml"
     assert config.knowledge is not None
@@ -91,6 +91,6 @@ def test_latest_migration_adds_knowledge_to_schema_1_5(tmp_path: Path) -> None:
     migrate_to_latest(source)
     config = ConfigLoader().load([source]).value
 
-    assert config.schema_version == "1.6"
+    assert config.schema_version == "1.7"
     assert config.knowledge is not None
     assert config.knowledge.selection_order["literal"] == ("literal-native",)

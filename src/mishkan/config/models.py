@@ -815,6 +815,27 @@ class KnowledgeConfig(StrictConfigModel):
         return self
 
 
+class SchedulingConfig(StrictConfigModel):
+    """Public operational bounds for the daemon-local scheduling driver."""
+
+    enabled: bool = True
+    poll_seconds: float = Field(gt=0, le=60)
+    misfire_grace_seconds: int = Field(ge=1, le=604_800)
+    coalesce: bool
+    max_catch_up_occurrences: int = Field(ge=1, le=10_000)
+    max_attempts: int = Field(ge=1, le=100)
+    retry_initial_seconds: float = Field(gt=0, le=86_400)
+    retry_multiplier: float = Field(ge=1, le=100)
+    retry_max_seconds: float = Field(gt=0, le=604_800)
+    history_page_limit: int = Field(ge=1, le=10_000)
+
+    @model_validator(mode="after")
+    def retry_ceiling_covers_initial_delay(self) -> Self:
+        if self.retry_max_seconds < self.retry_initial_seconds:
+            raise ValueError("schedule retry maximum cannot be below its initial delay")
+        return self
+
+
 class MishkanConfig(StrictConfigModel):
     """Complete effective configuration required before a run can be accepted."""
 
@@ -853,6 +874,7 @@ class MishkanConfig(StrictConfigModel):
     notifications: NotificationConfig = Field(default_factory=NotificationConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     knowledge: KnowledgeConfig | None = None
+    scheduling: SchedulingConfig | None = None
 
     @field_validator("timezone")
     @classmethod
@@ -861,7 +883,7 @@ class MishkanConfig(StrictConfigModel):
 
     @model_validator(mode="after")
     def references_exist(self) -> Self:
-        if self.schema_version in {"1.1", "1.2", "1.3", "1.4", "1.5", "1.6"}:
+        if self.schema_version in {"1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"}:
             missing = [
                 field
                 for field, value in (
@@ -875,7 +897,7 @@ class MishkanConfig(StrictConfigModel):
                 raise ValueError(
                     f"configuration 1.1 requires governed capability fields: {missing}"
                 )
-        if self.schema_version in {"1.2", "1.3", "1.4", "1.5", "1.6"}:
+        if self.schema_version in {"1.2", "1.3", "1.4", "1.5", "1.6", "1.7"}:
             missing_daemon = [
                 field
                 for field, value in (
@@ -888,7 +910,7 @@ class MishkanConfig(StrictConfigModel):
             ]
             if missing_daemon:
                 raise ValueError(f"configuration 1.2 requires daemon fields: {missing_daemon}")
-        if self.schema_version in {"1.3", "1.4", "1.5", "1.6"}:
+        if self.schema_version in {"1.3", "1.4", "1.5", "1.6", "1.7"}:
             missing_capabilities = [
                 field
                 for field, value in (
@@ -925,11 +947,11 @@ class MishkanConfig(StrictConfigModel):
                 and self.telemetry.exporter.network_profile not in self.web.network_profiles
             ):
                 raise ValueError("telemetry exporter references an unknown network profile")
-        if self.schema_version in {"1.4", "1.5", "1.6"} and self.skills is None:
+        if self.schema_version in {"1.4", "1.5", "1.6", "1.7"} and self.skills is None:
             raise ValueError("configuration 1.4+ requires the Skills capability configuration")
-        if self.schema_version in {"1.5", "1.6"} and self.engineering_profile is None:
+        if self.schema_version in {"1.5", "1.6", "1.7"} and self.engineering_profile is None:
             raise ValueError("configuration 1.5+ requires an Engineering profile")
-        if self.schema_version == "1.6":
+        if self.schema_version in {"1.6", "1.7"}:
             if self.knowledge is None:
                 raise ValueError("configuration 1.6 requires Knowledge configuration")
             assert self.web is not None
@@ -958,6 +980,8 @@ class MishkanConfig(StrictConfigModel):
                     "knowledge configuration references unknown MCP connections: "
                     f"{missing_knowledge_mcp}"
                 )
+        if self.schema_version == "1.7" and self.scheduling is None:
+            raise ValueError("configuration 1.7 requires Scheduling configuration")
 
         missing_providers = sorted(
             {
