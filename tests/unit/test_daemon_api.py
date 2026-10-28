@@ -170,6 +170,10 @@ async def test_schedule_commands_queries_and_snapshot_share_daemon_authority(
     tmp_path: Path,
 ) -> None:
     config = _config(tmp_path)
+    assert config.scheduling is not None
+    config = config.model_copy(
+        update={"scheduling": config.scheduling.model_copy(update={"history_page_limit": 1})}
+    )
     paths = DaemonBootstrap().setup(config, principal_id="PM")
     token = TokenFile(paths.token_file).read()
     headers = {"Authorization": f"Bearer {token.token}"}
@@ -204,6 +208,8 @@ async def test_schedule_commands_queries_and_snapshot_share_daemon_authority(
         listed = await client.get("/v1/schedules", headers=headers)
         assert listed.status_code == 200
         assert [item["schedule_id"] for item in listed.json()] == [str(request.schedule_id)]
+        over_limit = await client.get("/v1/schedules?limit=2", headers=headers)
+        assert over_limit.status_code == 422
 
         pause = ApplicationCommand(
             command_type="schedule.pause",

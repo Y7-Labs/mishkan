@@ -480,6 +480,11 @@ def create_app(
         content_inspector=content_inspector,
     )
     scheduling_config = config.scheduling
+    schedule_page_limit = (
+        scheduling_config.history_page_limit
+        if scheduling_config is not None
+        else daemon.event_page_limit
+    )
     schedule_repository = (
         SQLiteScheduleRepository(
             paths.database,
@@ -1420,11 +1425,11 @@ def create_app(
         if schedule_repository is not None:
             schedules = await _thread_call(
                 schedule_repository.list_schedules,
-                limit=daemon.event_page_limit,
+                limit=min(daemon.event_page_limit, schedule_page_limit),
             )
             history = await _thread_call(
                 schedule_repository.occurrences,
-                limit=daemon.event_page_limit,
+                limit=min(daemon.event_page_limit, schedule_page_limit),
             )
             projections["scheduling"] = {
                 "schedules": [item.model_dump(mode="json") for item in schedules],
@@ -1462,10 +1467,15 @@ def create_app(
         _principal: TokenRecord = authenticated,
         state: ScheduleState | None = None,
         offset: Annotated[int, Query(ge=0)] = 0,
-        limit: Annotated[int, Query(ge=1, le=10_000)] = 100,
+        limit: Annotated[int, Query(ge=1, le=10_000)] = min(100, schedule_page_limit),
     ) -> tuple[dict[str, object], ...]:
         if schedule_repository is None:
             raise MishkanError(ErrorCode.REQUIRED_DEPENDENCY, "scheduling is not configured")
+        if limit > schedule_page_limit:
+            raise MishkanError(
+                ErrorCode.OUTPUT_CONTRACT,
+                "schedule query exceeds the configured history page limit",
+            )
         records = await _thread_call(
             schedule_repository.list_schedules,
             state=state,
@@ -1488,10 +1498,15 @@ def create_app(
         schedule_id: UUID,
         _principal: TokenRecord = authenticated,
         offset: Annotated[int, Query(ge=0)] = 0,
-        limit: Annotated[int, Query(ge=1, le=10_000)] = 100,
+        limit: Annotated[int, Query(ge=1, le=10_000)] = min(100, schedule_page_limit),
     ) -> tuple[dict[str, object], ...]:
         if schedule_repository is None:
             raise MishkanError(ErrorCode.REQUIRED_DEPENDENCY, "scheduling is not configured")
+        if limit > schedule_page_limit:
+            raise MishkanError(
+                ErrorCode.OUTPUT_CONTRACT,
+                "schedule history query exceeds the configured page limit",
+            )
         await _thread_call(schedule_repository.schedule, schedule_id)
         records = await _thread_call(
             schedule_repository.occurrences,
