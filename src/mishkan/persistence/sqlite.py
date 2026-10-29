@@ -6,7 +6,6 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Protocol
 
 from sqlalchemy import (
@@ -17,8 +16,6 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
-    create_engine,
-    event,
     select,
 )
 from sqlalchemy.engine import Engine
@@ -27,6 +24,11 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, rela
 from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.domain.identity import new_id
 from mishkan.domain.time import utc_now
+from mishkan.persistence.runtime import (
+    DEFAULT_BUSY_TIMEOUT_MS,
+    DatabaseTarget,
+    database_engine,
+)
 from mishkan.planning.models import (
     AcceptedPlan,
     InitializationResult,
@@ -42,31 +44,14 @@ from mishkan.runtime import RunState, TaskReviewRejection, TaskState
 from mishkan.tools.execution import EffectSettlement
 from mishkan.tools.gateway_models import AuditEvent, CallStatus, ToolResultEnvelope
 
-DEFAULT_BUSY_TIMEOUT_MS = 5_000
-
 
 def create_local_engine(
-    database_path: Path,
+    database_path: DatabaseTarget,
     *,
     busy_timeout_ms: int = DEFAULT_BUSY_TIMEOUT_MS,
 ) -> Engine:
-    """Create one WAL SQLite engine from the effective public lock-wait setting."""
-    if busy_timeout_ms < 1:
-        raise MishkanError(ErrorCode.CONFIGURATION, "SQLite busy timeout must be positive")
-    engine = create_engine(
-        f"sqlite:///{database_path.resolve()}",
-        connect_args={"timeout": busy_timeout_ms / 1_000},
-    )
-
-    def configure(dbapi_connection: Any, _connection_record: Any) -> None:
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
-        cursor.close()
-
-    event.listen(engine, "connect", configure)
-    return engine
+    """Compatibility factory; shared runtimes preserve one injected engine."""
+    return database_engine(database_path, busy_timeout_ms=busy_timeout_ms)
 
 
 class Base(DeclarativeBase):
@@ -997,6 +982,176 @@ class ScheduleOccurrenceRow(Base):
     updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
 
 
+class WorkerIdentityRow(Base):
+    __tablename__ = "worker_identities"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    current_certificate_serial: Mapped[str | None] = mapped_column(String(128))
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    revoked_at: Mapped[str | None] = mapped_column(String(40))
+
+
+class WorkerEnrollmentTokenRow(Base):
+    __tablename__ = "worker_enrollment_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    token_digest: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(256), nullable=False)
+    worker_id: Mapped[str | None] = mapped_column(ForeignKey("worker_identities.id"))
+    expires_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    consumed_at: Mapped[str | None] = mapped_column(String(40))
+    revoked_at: Mapped[str | None] = mapped_column(String(40))
+
+
+class WorkerCertificateRow(Base):
+    __tablename__ = "worker_certificates"
+
+    serial: Mapped[str] = mapped_column(String(128), primary_key=True)
+    worker_id: Mapped[str] = mapped_column(ForeignKey("worker_identities.id"), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    not_before: Mapped[str] = mapped_column(String(40), nullable=False)
+    not_after: Mapped[str] = mapped_column(String(40), nullable=False)
+    issued_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    superseded_at: Mapped[str | None] = mapped_column(String(40))
+    revoked_at: Mapped[str | None] = mapped_column(String(40))
+
+
+class WorkerCertificateRotationRow(Base):
+    __tablename__ = "worker_certificate_rotations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    worker_id: Mapped[str] = mapped_column(ForeignKey("worker_identities.id"), nullable=False)
+    prior_serial: Mapped[str] = mapped_column(
+        ForeignKey("worker_certificates.serial"), nullable=False
+    )
+    certificate_serial: Mapped[str] = mapped_column(
+        ForeignKey("worker_certificates.serial"), unique=True, nullable=False
+    )
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    certificate_pem: Mapped[str] = mapped_column(Text, nullable=False)
+    certificate_authority_pem: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class WorkerHeartbeatRow(Base):
+    __tablename__ = "worker_heartbeats"
+
+    worker_id: Mapped[str] = mapped_column(ForeignKey("worker_identities.id"), primary_key=True)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    advertisement_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    observed_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    expires_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class RemoteTaskPlacementRow(Base):
+    __tablename__ = "remote_task_placements"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), nullable=False)
+    task_row_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), unique=True, nullable=False)
+    task_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    preferred_worker_id: Mapped[str | None] = mapped_column(ForeignKey("worker_identities.id"))
+    selected_worker_id: Mapped[str | None] = mapped_column(ForeignKey("worker_identities.id"))
+    current_envelope_id: Mapped[str | None] = mapped_column(ForeignKey("remote_task_envelopes.id"))
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_payload: Mapped[str] = mapped_column(Text, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class RemoteTaskEnvelopeRow(Base):
+    __tablename__ = "remote_task_envelopes"
+    __table_args__ = (
+        UniqueConstraint(
+            "task_row_id",
+            "task_attempt",
+            name="uq_remote_task_envelope_attempt",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), nullable=False)
+    task_row_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), nullable=False)
+    task_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    task_attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    worker_id: Mapped[str] = mapped_column(ForeignKey("worker_identities.id"), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    stateful_effects: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    deadline: Mapped[str] = mapped_column(String(40), nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class WorkerLeaseRow(Base):
+    __tablename__ = "worker_task_leases"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    envelope_id: Mapped[str] = mapped_column(
+        ForeignKey("remote_task_envelopes.id"), unique=True, nullable=False
+    )
+    worker_id: Mapped[str] = mapped_column(ForeignKey("worker_identities.id"), nullable=False)
+    claim_id: Mapped[str | None] = mapped_column(String(36), unique=True)
+    token_digest: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    issued_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    expires_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    last_renewed_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    completed_at: Mapped[str | None] = mapped_column(String(40))
+
+
+class WorkerCompletionRow(Base):
+    __tablename__ = "worker_task_completions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    envelope_id: Mapped[str] = mapped_column(ForeignKey("remote_task_envelopes.id"), nullable=False)
+    lease_id: Mapped[str] = mapped_column(ForeignKey("worker_task_leases.id"), nullable=False)
+    worker_id: Mapped[str] = mapped_column(ForeignKey("worker_identities.id"), nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    received_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    accepted_at: Mapped[str | None] = mapped_column(String(40))
+    decided_at: Mapped[str | None] = mapped_column(String(40))
+    decision_reason: Mapped[str | None] = mapped_column(Text)
+
+
+class WorkerTaskAcceptanceRow(Base):
+    __tablename__ = "worker_task_acceptances"
+
+    task_row_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), primary_key=True)
+    completion_id: Mapped[str] = mapped_column(
+        ForeignKey("worker_task_completions.id"), unique=True, nullable=False
+    )
+    envelope_id: Mapped[str] = mapped_column(ForeignKey("remote_task_envelopes.id"), nullable=False)
+    accepted_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class WorkerArtifactUploadRow(Base):
+    __tablename__ = "worker_artifact_uploads"
+
+    upload_id: Mapped[str] = mapped_column(ForeignKey("artifact_uploads.id"), primary_key=True)
+    lease_id: Mapped[str] = mapped_column(ForeignKey("worker_task_leases.id"), nullable=False)
+    worker_id: Mapped[str] = mapped_column(ForeignKey("worker_identities.id"), nullable=False)
+    artifact_id: Mapped[str | None] = mapped_column(ForeignKey("artifacts.id"), unique=True)
+    expected_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
 @dataclass(frozen=True, slots=True)
 class RunSnapshot:
     run_id: str
@@ -1019,7 +1174,7 @@ class RunContentInspector(Protocol):
 class LocalRunRepository:
     def __init__(
         self,
-        database_path: Path,
+        database_path: DatabaseTarget,
         *,
         busy_timeout_ms: int = DEFAULT_BUSY_TIMEOUT_MS,
         content_inspector: RunContentInspector | None = None,
@@ -1432,7 +1587,11 @@ class LocalRunRepository:
                     task.status = TaskState.CANCELLED.value
                     task.revision += 1
                     task.updated_at = now
-                elif task.status in {TaskState.EXECUTING.value, TaskState.VALIDATING.value}:
+                elif task.status in {
+                    TaskState.LEASED.value,
+                    TaskState.EXECUTING.value,
+                    TaskState.VALIDATING.value,
+                }:
                     self._add_event(
                         session,
                         run_id,
@@ -1440,7 +1599,12 @@ class LocalRunRepository:
                         {"task_id": task.task_key},
                     )
             if not any(
-                task.status in {TaskState.EXECUTING.value, TaskState.VALIDATING.value}
+                task.status
+                in {
+                    TaskState.LEASED.value,
+                    TaskState.EXECUTING.value,
+                    TaskState.VALIDATING.value,
+                }
                 for task in tasks
             ):
                 run.status = RunState.CANCELLED.value
@@ -1645,6 +1809,7 @@ class LocalRunRepository:
                 if task.status in {
                     TaskState.PENDING.value,
                     TaskState.ELIGIBLE.value,
+                    TaskState.LEASED.value,
                     TaskState.EXECUTING.value,
                     TaskState.VALIDATING.value,
                 }:

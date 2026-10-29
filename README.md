@@ -10,8 +10,8 @@ execution, preserves decisions and evidence, and returns independently reviewed 
 retain authority over consequential actions.
 
 > **Pre-release:** MISHKAN is under active development and currently installs from source. The
-> implemented product is a local, single-daemon system for Linux and macOS. Distributed workers
-> and the operational TUI remain roadmap work.
+> implemented product supports local single-daemon operation and an explicitly enabled distributed
+> mode on Linux and macOS. The operational TUI remains roadmap work.
 
 ## Organization model
 
@@ -79,6 +79,9 @@ fixed crew, or static role-to-tool matrix.
   and records their evidence.
 - **Artifacts and recovery journals** preserve large outputs and reconcile interrupted effects
   without silently replaying uncertain work.
+- **Distributed execution** keeps `mishkand` authoritative while mTLS workers claim bounded leases
+  and execute already accepted CrewAI tasks from immutable envelopes. Workers cannot accept their
+  own result or expand its policy scope.
 
 Operational CLI, Python, HTTP/SSE, and MCP clients all enter through the same MISHKAN authority:
 
@@ -113,6 +116,7 @@ CLI · Python SDK · HTTP/SSE · MCP bridge
 | Observability | Bounded OpenTelemetry projection and optional non-authoritative LangSmith feedback import under public disclosure policy |
 | Attributed knowledge | Explicit literal, episodic, semantic, and structural queries; immutable evidence bundles and Context Packs; authenticated mem0, Cognee, and Graphify adapters; governed ingestion, memory capture, promotion, and visible degraded operation |
 | Persistent scheduling | Durable timezone-aware one-shot and five-field cron schedules, run-now, pause/resume/remove, bounded history, coalescing, misfire and retry policy, overlap control, restart recovery, and cron/systemd/launchd exports through the same governed trigger authority |
+| Distributed execution | Explicit PostgreSQL metadata and S3-compatible artifact mode, stateless `mishkan-worker` processes, one-time enrollment, individually revocable mTLS identities, capability-aware placement, immutable task envelopes, renewable leases, loss recovery, artifact/patch delivery, and exactly-once durable result acceptance |
 
 The detailed implementation status and evidence are maintained in the
 [documentation index](docs/README.md), not duplicated here.

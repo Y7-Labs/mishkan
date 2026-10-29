@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -48,6 +49,8 @@ knowledge_app = typer.Typer(help="Query and govern attributed knowledge through 
 memory_app = typer.Typer(help="Recall and capture accepted episodic memory through mishkand.")
 code_graph_app = typer.Typer(help="Query and refresh structural repository evidence.")
 schedule_app = typer.Typer(help="Create and govern persistent headless schedules.")
+worker_app = typer.Typer(help="Enroll, inspect, rotate, and revoke distributed workers.")
+worker_enrollment_app = typer.Typer(help="Administer short-lived one-time enrollment credentials.")
 app.add_typer(config_app, name="config")
 app.add_typer(schema_app, name="schema")
 app.add_typer(daemon_app, name="daemon")
@@ -74,6 +77,8 @@ app.add_typer(knowledge_app, name="knowledge")
 app.add_typer(memory_app, name="memory")
 app.add_typer(code_graph_app, name="code-graph")
 app.add_typer(schedule_app, name="schedule")
+app.add_typer(worker_app, name="worker")
+worker_app.add_typer(worker_enrollment_app, name="enrollment")
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -87,6 +92,97 @@ def _read_contract(path: Path, model: type[ModelT], option: str) -> ModelT:
 
 def _dump_models(values: tuple[BaseModel, ...]) -> list[dict[str, Any]]:
     return [value.model_dump(mode="json") for value in values]
+
+
+@worker_enrollment_app.command("create")
+def create_worker_enrollment(ctx: typer.Context) -> None:
+    """Create and reveal one enrollment secret exactly once."""
+    with _daemon_client(ctx) as client:
+        credential = client.workers.create_enrollment()
+    _emit(
+        {
+            "token_id": str(credential.id),
+            "token": credential.token.get_secret_value(),
+            "expires_at": credential.expires_at.isoformat(),
+        },
+        as_json=_state(ctx).json_output,
+    )
+
+
+@worker_enrollment_app.command("revoke")
+def revoke_worker_enrollment(ctx: typer.Context, token_id: UUID) -> None:
+    """Revoke one unused enrollment credential."""
+    with _daemon_client(ctx) as client:
+        client.workers.revoke_enrollment(token_id)
+    _emit({"token_id": str(token_id), "state": "revoked"}, as_json=True)
+
+
+@worker_app.command("list")
+def list_workers(
+    ctx: typer.Context,
+    offset: Annotated[int, typer.Option(min=0)] = 0,
+    limit: Annotated[int, typer.Option(min=1, max=10_000)] = 100,
+) -> None:
+    """List bounded worker identity, heartbeat, and availability projections."""
+    with _daemon_client(ctx) as client:
+        statuses = client.workers.statuses(offset=offset, limit=limit)
+    _emit(_dump_models(statuses), as_json=_state(ctx).json_output)
+
+
+@worker_app.command("show")
+def show_worker(ctx: typer.Context, worker_id: UUID) -> None:
+    """Inspect one exact worker identity, heartbeat, and availability state."""
+    with _daemon_client(ctx) as client:
+        status = client.workers.status(worker_id)
+    _emit(status.model_dump(mode="json"), as_json=_state(ctx).json_output)
+
+
+@worker_app.command("revoke")
+def revoke_worker(
+    ctx: typer.Context,
+    worker_id: UUID,
+    expected_revision: Annotated[int | None, typer.Option(min=1)] = None,
+) -> None:
+    """Revoke one worker and every certificate issued to it."""
+    with _daemon_client(ctx) as client:
+        revision = (
+            expected_revision
+            if expected_revision is not None
+            else client.workers.get(worker_id).revision
+        )
+        identity = client.workers.revoke(worker_id, expected_revision=revision)
+    _emit(identity.model_dump(mode="json"), as_json=_state(ctx).json_output)
+
+
+@worker_app.command("place")
+def place_worker_task(
+    ctx: typer.Context,
+    request_file: Annotated[Path, typer.Option("--request")],
+) -> None:
+    """Queue one governed immutable remote-task placement."""
+    from mishkan.workers import RemotePlacementRequest
+
+    request = _read_contract(request_file, RemotePlacementRequest, "--request")
+    with _daemon_client(ctx) as client:
+        placement = client.workers.place(request)
+    _emit(placement.model_dump(mode="json"), as_json=_state(ctx).json_output)
+
+
+@worker_app.command("accept")
+def accept_worker_completion(
+    ctx: typer.Context,
+    completion_id: UUID,
+    result_file: Annotated[Path, typer.Option("--result")],
+    review_file: Annotated[Path, typer.Option("--review")],
+) -> None:
+    """Accept one delivered completion from independently validated contracts."""
+    from mishkan.planning.models import InitializationResult, ReviewDecision
+
+    result = _read_contract(result_file, InitializationResult, "--result")
+    review = _read_contract(review_file, ReviewDecision, "--review")
+    with _daemon_client(ctx) as client:
+        completion = client.workers.accept_completion(completion_id, result, review)
+    _emit(completion.model_dump(mode="json"), as_json=_state(ctx).json_output)
 
 
 @schedule_app.command("create")
@@ -1447,20 +1543,27 @@ def rotate_daemon_token(ctx: typer.Context) -> None:
 @database_app.command("status")
 def database_status(ctx: typer.Context) -> None:
     """Report the observed schema without changing it."""
+    from mishkan.crewai.credentials import CredentialPoolResolver
     from mishkan.daemon.bootstrap import DaemonPaths
+    from mishkan.daemon.composition import build_database_runtime
     from mishkan.persistence import SchemaManager
 
     state = _state(ctx)
     effective = _load_or_exit(ctx)
     try:
         paths = DaemonPaths.from_config(effective.value)
-        observed = SchemaManager(paths.database).status()
+        runtime = build_database_runtime(effective.value, paths, CredentialPoolResolver())
+        try:
+            observed = SchemaManager(runtime).status()
+            database_name = runtime.display_name
+        finally:
+            runtime.dispose()
     except MishkanError as error:
         _emit_error(error, as_json=state.json_output)
         raise typer.Exit(code=2) from error
     _emit(
         {
-            "database": str(paths.database),
+            "database": database_name,
             "state": observed.state.value,
             "current_revision": observed.current_revision,
             "head_revision": observed.head_revision,
@@ -1472,34 +1575,47 @@ def database_status(ctx: typer.Context) -> None:
 @database_app.command("upgrade")
 def database_upgrade(ctx: typer.Context) -> None:
     """Back up and explicitly upgrade recognized metadata to the current head."""
+    from mishkan.crewai.credentials import CredentialPoolResolver
     from mishkan.daemon.bootstrap import DaemonPaths
+    from mishkan.daemon.composition import (
+        build_artifact_body_store,
+        build_database_runtime,
+        repository_busy_timeout_ms,
+    )
     from mishkan.persistence import SchemaManager
 
     state = _state(ctx)
     effective = _load_or_exit(ctx)
     try:
         paths = DaemonPaths.from_config(effective.value)
-        observed = SchemaManager(paths.database).upgrade()
-        artifact_config = effective.value.artifacts
-        persistence_config = effective.value.persistence
-        assert artifact_config is not None
-        assert persistence_config is not None
-        from mishkan.artifacts.service import DurableArtifactService
+        credentials = CredentialPoolResolver()
+        runtime = build_database_runtime(effective.value, paths, credentials)
+        try:
+            observed = SchemaManager(runtime).upgrade()
+            artifact_config = effective.value.artifacts
+            persistence_config = effective.value.persistence
+            assert artifact_config is not None
+            assert persistence_config is not None
+            from mishkan.artifacts.service import DurableArtifactService
 
-        imported_artifacts = DurableArtifactService(
-            paths.database,
-            paths.artifacts,
-            max_artifact_bytes=artifact_config.max_artifact_bytes,
-            max_chunk_bytes=artifact_config.chunk_bytes,
-            busy_timeout_ms=persistence_config.busy_timeout_ms,
-            staging_ttl_seconds=artifact_config.staging_ttl_seconds,
-        ).import_legacy_manifests()
+            imported_artifacts = DurableArtifactService(
+                runtime,
+                paths.artifacts,
+                max_artifact_bytes=artifact_config.max_artifact_bytes,
+                max_chunk_bytes=artifact_config.chunk_bytes,
+                busy_timeout_ms=repository_busy_timeout_ms(effective.value),
+                staging_ttl_seconds=artifact_config.staging_ttl_seconds,
+                body_store=build_artifact_body_store(effective.value, paths, credentials),
+            ).import_legacy_manifests()
+            database_name = runtime.display_name
+        finally:
+            runtime.dispose()
     except MishkanError as error:
         _emit_error(error, as_json=state.json_output)
         raise typer.Exit(code=2) from error
     _emit(
         {
-            "database": str(paths.database),
+            "database": database_name,
             "state": observed.state.value,
             "revision": observed.current_revision,
             "backup": str(observed.backup_path) if observed.backup_path else None,
@@ -1511,16 +1627,31 @@ def database_upgrade(ctx: typer.Context) -> None:
 
 def _daemon_client(ctx: typer.Context):  # type: ignore[no-untyped-def]
     from mishkan.client import Mishkan, daemon_url
+    from mishkan.config.models import OperatingMode
+    from mishkan.crewai.credentials import CredentialPoolResolver
     from mishkan.daemon.bootstrap import DaemonPaths
 
     effective = _load_or_exit(ctx)
     paths = DaemonPaths.from_config(effective.value)
     daemon = effective.value.daemon
     assert daemon is not None
+    verify: ssl.SSLContext | bool = True
+    if effective.value.mode is OperatingMode.DISTRIBUTED:
+        distributed = effective.value.distributed
+        assert distributed is not None
+        ca_pem = CredentialPoolResolver().resolve_exact((distributed.server_ca_certificate_ref,))[
+            distributed.server_ca_certificate_ref.locator
+        ]
+        verify = ssl.create_default_context(cadata=ca_pem)
     return Mishkan(
-        daemon_url(daemon.host, daemon.port),
+        daemon_url(
+            daemon.host,
+            daemon.port,
+            secure=effective.value.mode is OperatingMode.DISTRIBUTED,
+        ),
         token_file=paths.token_file,
         timeout_seconds=daemon.request_timeout_seconds,
+        verify=verify,
     )
 
 

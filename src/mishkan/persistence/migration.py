@@ -14,9 +14,11 @@ from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import Integer, String, Text, create_engine, inspect
+from sqlalchemy.engine import Engine
 from sqlalchemy.engine.reflection import Inspector
 
 from mishkan.domain.errors import ErrorCode, MishkanError
+from mishkan.persistence.runtime import DatabaseRuntime, DatabaseTarget
 
 I02_BASELINE = "i02_baseline"
 
@@ -139,25 +141,32 @@ class DatabaseStatus:
 
 
 class SchemaManager:
-    def __init__(self, database_path: Path) -> None:
-        self.database_path = database_path.resolve()
+    def __init__(self, database: DatabaseTarget) -> None:
+        if isinstance(database, DatabaseRuntime):
+            self.database_path: Path | None = None
+            self._engine: Engine | None = database.engine
+            self._display_name = database.display_name
+        else:
+            self.database_path = database.resolve()
+            self._engine = None
+            self._display_name = str(self.database_path)
 
     def status(self) -> DatabaseStatus:
         head = self._head()
-        if not self.database_path.exists() or self.database_path.stat().st_size == 0:
+        if self.database_path is not None and (
+            not self.database_path.exists() or self.database_path.stat().st_size == 0
+        ):
             return DatabaseStatus(DatabaseState.EMPTY, None, head)
-        engine = create_engine(f"sqlite:///{self.database_path}")
+        engine, owned = self._open_engine()
         try:
             inspector = inspect(engine)
             tables = set(inspector.get_table_names())
             if not tables:
                 return DatabaseStatus(DatabaseState.EMPTY, None, head)
             if "alembic_version" not in tables:
-                state = (
-                    DatabaseState.LEGACY_I02
-                    if self._is_i02(inspector, tables)
-                    else DatabaseState.UNKNOWN
-                )
+                state = DatabaseState.UNKNOWN
+                if engine.dialect.name == "sqlite" and self._is_i02(inspector, tables):
+                    state = DatabaseState.LEGACY_I02
                 return DatabaseStatus(state, None, head)
             with engine.connect() as connection:
                 current = MigrationContext.configure(connection).get_current_revision()
@@ -167,7 +176,8 @@ class SchemaManager:
             state = DatabaseState.OUTDATED if current in known else DatabaseState.UNKNOWN
             return DatabaseStatus(state, current, head)
         finally:
-            engine.dispose()
+            if owned:
+                engine.dispose()
 
     def initialize(self) -> DatabaseStatus:
         observed = self.status()
@@ -175,9 +185,10 @@ class SchemaManager:
             raise MishkanError(
                 ErrorCode.VERSION,
                 "database initialization requires an empty destination",
-                details={"state": observed.state.value, "database": str(self.database_path)},
+                details={"state": observed.state.value, "database": self._display_name},
             )
-        self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.database_path is not None:
+            self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._upgrade_to_head()
         return self.status()
 
@@ -195,9 +206,9 @@ class SchemaManager:
             raise MishkanError(
                 ErrorCode.VERSION,
                 "database schema is not a recognized MISHKAN revision",
-                details={"database": str(self.database_path), "automatic_migration": False},
+                details={"database": self._display_name, "automatic_migration": False},
             )
-        backup = self._backup()
+        backup = self._backup() if self.database_path is not None else None
         if observed.state is DatabaseState.LEGACY_I02:
             self._stamp(I02_BASELINE)
         self._upgrade_to_head()
@@ -226,7 +237,14 @@ class SchemaManager:
     def _config(self) -> Config:
         config = Config()
         config.set_main_option("script_location", str(Path(__file__).parent / "migrations"))
-        config.set_main_option("sqlalchemy.url", f"sqlite:///{self.database_path}")
+        if self._engine is not None:
+            config.set_main_option(
+                "sqlalchemy.url",
+                self._engine.url.render_as_string(hide_password=False),
+            )
+        else:
+            assert self.database_path is not None
+            config.set_main_option("sqlalchemy.url", f"sqlite:///{self.database_path}")
         return config
 
     def _scripts(self) -> ScriptDirectory:
@@ -245,16 +263,18 @@ class SchemaManager:
         self._run_alembic(command.stamp, revision)
 
     def _run_alembic(self, operation: Callable[[Config, str], None], revision: str) -> None:
-        engine = create_engine(f"sqlite:///{self.database_path}")
+        engine, owned = self._open_engine()
         try:
             with engine.begin() as connection:
                 config = self._config()
                 config.attributes["connection"] = connection
                 operation(config, revision)
         finally:
-            engine.dispose()
+            if owned:
+                engine.dispose()
 
     def _backup(self) -> Path:
+        assert self.database_path is not None
         directory = self.database_path.parent / "backups"
         directory.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
@@ -262,6 +282,12 @@ class SchemaManager:
         with sqlite3.connect(self.database_path) as source, sqlite3.connect(destination) as target:
             source.backup(target)
         return destination
+
+    def _open_engine(self) -> tuple[Engine, bool]:
+        if self._engine is not None:
+            return self._engine, False
+        assert self.database_path is not None
+        return create_engine(f"sqlite:///{self.database_path}"), True
 
     @staticmethod
     def _is_i02(inspector: Inspector, tables: set[str]) -> bool:

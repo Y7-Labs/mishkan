@@ -1,0 +1,31 @@
+{
+  "additionalProperties": false,
+  "description": "Idempotent pull claim; the worker retains the matching lease secret.",
+  "properties": {
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "id": {
+      "format": "uuid",
+      "title": "Id",
+      "type": "string"
+    },
+    "lease_token_digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Lease Token Digest",
+      "type": "string"
+    },
+    "schema_version": {
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "lease_token_digest"
+  ],
+  "title": "WorkerClaimRequest",
+  "type": "object"
+}

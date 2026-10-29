@@ -18,7 +18,12 @@ depends_on = None
 def upgrade() -> None:
     with op.batch_alter_table("runs") as batch:
         batch.add_column(
-            sa.Column("cancellation_requested", sa.Boolean(), nullable=False, server_default="0")
+            sa.Column(
+                "cancellation_requested",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.false(),
+            )
         )
         batch.add_column(sa.Column("updated_at", sa.String(40), nullable=True))
     with op.batch_alter_table("tasks") as batch:

@@ -86,6 +86,7 @@ from mishkan.organization import (
     ProfessionalPromotionDisposition,
     ProfessionalPromotionRequest,
 )
+from mishkan.planning.models import InitializationResult, ReviewDecision
 from mishkan.policy import (
     AuthorizationDecision,
     AuthorizationRequest,
@@ -105,6 +106,7 @@ from mishkan.skills.models import (
 )
 from mishkan.telemetry.models import LangSmithFeedbackImportRequest
 from mishkan.tools.models import RegistryEntryKind, RegistryLifecycleAction, RegistryMutation
+from mishkan.workers.models import RemotePlacementRequest
 
 
 class ChangeSetLookup(Protocol):
@@ -168,6 +170,23 @@ COMMAND_SEMANTICS = MappingProxyType(
         ),
         "schedule.trigger": CommandSemantics(
             "application.schedule.trigger", "coordination", ("schedule.trigger",)
+        ),
+        "worker.enrollment.create": CommandSemantics(
+            "application.worker.enrollment", "control", ("worker.enrollment.create",)
+        ),
+        "worker.enrollment.revoke": CommandSemantics(
+            "application.worker.enrollment", "control", ("worker.enrollment.revoke",)
+        ),
+        "worker.revoke": CommandSemantics(
+            "application.worker.identity", "control", ("worker.revoke",)
+        ),
+        "worker.task.place": CommandSemantics(
+            "application.worker.placement", "coordination", ("worker.task.place",)
+        ),
+        "worker.completion.accept": CommandSemantics(
+            "application.worker.acceptance",
+            "coordination",
+            ("worker.completion.accept",),
         ),
         "artifact.upload.open": CommandSemantics(
             "application.artifact.upload", "artifact", ("artifact.stage",)
@@ -452,6 +471,11 @@ _COMMAND_TARGETS = MappingProxyType(
         "schedule.remove": ("schedule", "uuid"),
         "schedule.run_now": ("schedule", "uuid"),
         "schedule.trigger": ("schedule", "uuid"),
+        "worker.enrollment.create": ("worker_enrollment", "uuid"),
+        "worker.enrollment.revoke": ("worker_enrollment", "uuid"),
+        "worker.revoke": ("worker", "uuid"),
+        "worker.task.place": ("worker_task_placement", "uuid"),
+        "worker.completion.accept": ("worker_completion", "uuid"),
         "artifact.upload.open": ("artifact_service", "absent"),
         "artifact.upload.chunk": ("artifact_upload", "uuid"),
         "artifact.upload.commit": ("artifact_upload", "uuid"),
@@ -565,6 +589,14 @@ _COMMAND_PAYLOAD_FIELDS = MappingProxyType(
         "schedule.remove": (frozenset(), frozenset()),
         "schedule.run_now": (frozenset(), frozenset()),
         "schedule.trigger": (frozenset({"request"}), frozenset()),
+        "worker.enrollment.create": (frozenset({"token_digest"}), frozenset()),
+        "worker.enrollment.revoke": (frozenset(), frozenset()),
+        "worker.revoke": (frozenset(), frozenset()),
+        "worker.task.place": (frozenset({"request"}), frozenset()),
+        "worker.completion.accept": (
+            frozenset({"result", "review"}),
+            frozenset(),
+        ),
         "artifact.upload.open": (
             frozenset({"expected_size", "expected_digest", "media_type", "provenance"}),
             frozenset({"sensitivity", "retention"}),
@@ -745,6 +777,9 @@ class AuthorizedApplicationCommand:
     knowledge_promotion_decision: KnowledgePromotionDecision | None = None
     schedule_create: ScheduleCreateRequest | None = None
     schedule_fire: ScheduleFireRequest | None = None
+    worker_placement: RemotePlacementRequest | None = None
+    worker_completion_result: InitializationResult | None = None
+    worker_completion_review: ReviewDecision | None = None
 
 
 class ApplicationCommandAuthority:
@@ -844,6 +879,9 @@ class ApplicationCommandAuthority:
         knowledge_promotion_decision: KnowledgePromotionDecision | None = None
         schedule_create: ScheduleCreateRequest | None = None
         schedule_fire: ScheduleFireRequest | None = None
+        worker_placement: RemotePlacementRequest | None = None
+        worker_completion_result: InitializationResult | None = None
+        worker_completion_review: ReviewDecision | None = None
 
         try:
             if normalized.command_type == "run.initialize":
@@ -875,6 +913,64 @@ class ApplicationCommandAuthority:
                 external_resources = (f"schedule:{normalized.target_id}",)
             elif normalized.command_type.startswith("schedule."):
                 external_resources = (f"schedule:{normalized.target_id}",)
+            elif normalized.command_type == "worker.enrollment.create":
+                digest = normalized.payload["token_digest"]
+                if (
+                    not isinstance(digest, str)
+                    or len(digest) != 64
+                    or any(character not in "0123456789abcdef" for character in digest)
+                ):
+                    raise ValueError("worker enrollment token digest must be lowercase SHA-256")
+                if self._config.distributed is None:
+                    raise MishkanError(
+                        ErrorCode.REQUIRED_DEPENDENCY,
+                        "distributed worker enrollment is not configured",
+                    )
+                external_resources = (f"worker-enrollment:{normalized.target_id}",)
+            elif normalized.command_type == "worker.enrollment.revoke":
+                external_resources = (f"worker-enrollment:{normalized.target_id}",)
+            elif normalized.command_type == "worker.revoke":
+                if normalized.expected_revision is None:
+                    raise ValueError("worker revocation requires an expected revision")
+                external_resources = (f"worker:{normalized.target_id}",)
+            elif normalized.command_type == "worker.task.place":
+                worker_placement = RemotePlacementRequest.model_validate(
+                    normalized.payload["request"]
+                )
+                if str(worker_placement.id) != normalized.target_id:
+                    raise ValueError("worker placement target differs from its request identity")
+                if self._config.distributed is None:
+                    raise MishkanError(
+                        ErrorCode.REQUIRED_DEPENDENCY,
+                        "distributed worker placement is not configured",
+                    )
+                timeout = worker_placement.resources.timeout_seconds
+                paths = tuple(
+                    f"{scope.root_id}:{scope.relative_path}"
+                    for scope in worker_placement.path_scopes
+                )
+                external_resources = (
+                    f"run:{worker_placement.run_id}",
+                    f"task:{worker_placement.run_id}:{worker_placement.task_id}",
+                    *(
+                        (f"worker:{worker_placement.preferred_worker_id}",)
+                        if worker_placement.preferred_worker_id is not None
+                        else ()
+                    ),
+                )
+            elif normalized.command_type == "worker.completion.accept":
+                worker_completion_result = InitializationResult.model_validate(
+                    normalized.payload["result"]
+                )
+                worker_completion_review = ReviewDecision.model_validate(
+                    normalized.payload["review"]
+                )
+                if worker_completion_result.task_id != worker_completion_review.task_id:
+                    raise ValueError("worker completion result and review identify different tasks")
+                external_resources = (
+                    f"worker-completion:{normalized.target_id}",
+                    f"task:{worker_completion_result.task_id}",
+                )
             elif normalized.command_type == "run.repository.establish":
                 repository_establishment_request = RepositoryEstablishmentRequest.model_validate(
                     normalized.payload
@@ -2067,6 +2163,9 @@ class ApplicationCommandAuthority:
             knowledge_promotion_decision=knowledge_promotion_decision,
             schedule_create=schedule_create,
             schedule_fire=schedule_fire,
+            worker_placement=worker_placement,
+            worker_completion_result=worker_completion_result,
+            worker_completion_review=worker_completion_review,
         )
 
     @staticmethod

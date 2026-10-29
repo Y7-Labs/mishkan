@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -16,6 +15,7 @@ from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.domain.identity import new_id
 from mishkan.domain.time import utc_now
 from mishkan.persistence.migration import SchemaManager
+from mishkan.persistence.runtime import DatabaseTarget
 from mishkan.persistence.sqlite import ToolRegistryEntryRow, create_local_engine
 from mishkan.tools.models import (
     AdapterDescriptor,
@@ -33,7 +33,7 @@ from mishkan.tools.models import (
 class ToolRegistryLifecycle:
     """Validate and persist lifecycle overrides without mutating old snapshots."""
 
-    def __init__(self, database: Path, *, busy_timeout_ms: int = 5_000) -> None:
+    def __init__(self, database: DatabaseTarget, *, busy_timeout_ms: int = 5_000) -> None:
         SchemaManager(database).require_current()
         self._engine = create_local_engine(database, busy_timeout_ms=busy_timeout_ms)
 

@@ -6,12 +6,17 @@ from pathlib import Path
 
 from mishkan.artifacts import ArtifactStore, FilesystemArtifactStore
 from mishkan.artifacts.service import DurableArtifactService
-from mishkan.config.models import CredentialReference, MishkanConfig
+from mishkan.config.models import (
+    ArtifactConfig,
+    CredentialReference,
+    MishkanConfig,
+    PersistenceConfig,
+)
 from mishkan.crewai.credentials import CredentialPoolResolver
 from mishkan.crewai.environment import configure_crewai_environment
 from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.organization import load_initialization_definitions
-from mishkan.persistence import LocalRunRepository, SchemaManager
+from mishkan.persistence import DatabaseRuntime, LocalRunRepository, SchemaManager
 from mishkan.planning import PlanValidator
 from mishkan.planning.models import InitializationReport
 from mishkan.policy import PolicyAuthority, PolicyLoader
@@ -75,7 +80,16 @@ class MishkanInitializer:
         on_run_started: Callable[[str], None] | None = None,
         capability_adapters: Mapping[str, CapabilityAdapter] | None = None,
     ) -> InitializationReport:
-        if config.schema_version not in {"1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7"}:
+        if config.schema_version not in {
+            "1.1",
+            "1.2",
+            "1.3",
+            "1.4",
+            "1.5",
+            "1.6",
+            "1.7",
+            "1.8",
+        }:
             raise MishkanError(
                 ErrorCode.VERSION,
                 "governed initialization requires configuration schema 1.1 or 1.2",
@@ -94,7 +108,13 @@ class MishkanInitializer:
         SchemaManager(database).initialize_if_empty()
         persistence_config = config.persistence
         busy_timeout_ms = (
-            persistence_config.busy_timeout_ms if persistence_config is not None else 5_000
+            persistence_config.busy_timeout_ms
+            if isinstance(persistence_config, PersistenceConfig)
+            else 5_000
+        )
+        database_runtime = DatabaseRuntime.sqlite(
+            database,
+            busy_timeout_ms=busy_timeout_ms,
         )
         native_environment = discover_native_environment()
         policy = PolicyLoader().load(config.policy_sources, discovery.binding.root)
@@ -108,7 +128,7 @@ class MishkanInitializer:
             InspectionProfileLoader().load(inspection_source, discovery.binding.root)
         )
         state_repository = LocalRunRepository(
-            database,
+            database_runtime,
             busy_timeout_ms=busy_timeout_ms,
             content_inspector=inspector,
         )
@@ -135,11 +155,15 @@ class MishkanInitializer:
                     | frozenset({ContainerCommandAdapter.adapter_id})
                 ),
             )
-        if config.schema_version in {"1.3", "1.4", "1.5", "1.6", "1.7"}:
+        if config.schema_version in {"1.3", "1.4", "1.5", "1.6", "1.7", "1.8"}:
             artifact_config = config.artifacts
-            assert artifact_config is not None
+            if not isinstance(artifact_config, ArtifactConfig):
+                raise MishkanError(
+                    ErrorCode.CONFIGURATION,
+                    "repository initialization requires filesystem artifact storage",
+                )
             durable_artifacts = DurableArtifactService(
-                database,
+                database_runtime,
                 discovery.binding.root / artifact_config.root,
                 max_artifact_bytes=artifact_config.max_artifact_bytes,
                 max_chunk_bytes=artifact_config.chunk_bytes,
@@ -149,7 +173,7 @@ class MishkanInitializer:
             )
             runtime = build_capability_runtime(
                 config,
-                database,
+                database_runtime,
                 discovery.binding.root,
                 durable_artifacts,
                 inspector,
@@ -167,7 +191,10 @@ class MishkanInitializer:
             discovery.binding.root,
             available_dependencies=available_environment.dependencies,
             available_adapters=available_environment.adapter_ids,
-            lifecycle=ToolRegistryLifecycle(database, busy_timeout_ms=busy_timeout_ms).projection(),
+            lifecycle=ToolRegistryLifecycle(
+                database_runtime,
+                busy_timeout_ms=busy_timeout_ms,
+            ).projection(),
         )
         authority = PolicyAuthority()
         contracts = available_contracts(catalog, outcome.allowed_tools)

@@ -7,16 +7,19 @@ import base64
 import json
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
 from typing import Annotated, Literal, ParamSpec, TypeVar
 from uuid import UUID
 
 import anyio
+from cryptography import x509
+from cryptography.hazmat.primitives import serialization
 from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import SecretStr
 from sqlalchemy.orm import Session
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -69,6 +72,12 @@ from mishkan.crewai.mission_governance import (
 from mishkan.crewai.skill_learning import CrewAISkillLearningRunner
 from mishkan.daemon.auth import TokenFile, TokenRecord
 from mishkan.daemon.bootstrap import DaemonPaths
+from mishkan.daemon.composition import (
+    build_artifact_body_store,
+    build_database_runtime,
+    build_worker_identity_services,
+    repository_busy_timeout_ms,
+)
 from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.domain.time import utc_now
 from mishkan.edits import ChangeSet, ChangeSetResult, ChangeSetService
@@ -178,7 +187,11 @@ from mishkan.organization import (
     load_canonical_organization,
 )
 from mishkan.organization.evolution_repository import SQLiteProfessionalEvolutionRepository
-from mishkan.persistence import LocalRunRepository, SchemaManager, SQLiteApplicationRepository
+from mishkan.persistence import (
+    LocalRunRepository,
+    SchemaManager,
+    SQLiteApplicationRepository,
+)
 from mishkan.policy import Decision
 from mishkan.policy.models import EffectivePolicy
 from mishkan.repository import (
@@ -225,6 +238,26 @@ from mishkan.tools.inspection import ContentInspector, InspectionProfileLoader
 from mishkan.tools.isolation import IsolationProfileLoader, observe_container_commands
 from mishkan.tools.lifecycle import ToolRegistryLifecycle
 from mishkan.web.network import HttpxWebTransport
+from mishkan.workers.coordination import WorkerCoordinationRepository
+from mishkan.workers.models import (
+    WorkerArtifactUploadRequest,
+    WorkerCertificateBundle,
+    WorkerCertificateRotationRequest,
+    WorkerClaimRequest,
+    WorkerCompletion,
+    WorkerCompletionSubmission,
+    WorkerEnrollmentRequest,
+    WorkerHeartbeat,
+    WorkerHeartbeatRecord,
+    WorkerIdentity,
+    WorkerLease,
+    WorkerRotationRequest,
+    WorkerStatus,
+    WorkerTaskClaim,
+)
+from mishkan.workers.recovery import WorkerLeaseRecoveryDriver
+from mishkan.workers.service import WorkerCoordinationService
+from mishkan.workers.transport import peer_certificate_der
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
@@ -447,18 +480,53 @@ def create_app(
     telemetry_exporter_factory: Callable[[], TelemetryExporter] | None = None,
 ) -> FastAPI:
     paths = DaemonPaths.from_config(config)
-    SchemaManager(paths.database).require_current()
     token_file = TokenFile(paths.token_file)
     token_file.read()
     persistence = config.persistence
     assert persistence is not None
+    credential_resolver = CredentialPoolResolver()
+    database_runtime = build_database_runtime(config, paths, credential_resolver)
+    SchemaManager(database_runtime).require_current()
+    busy_timeout_ms = repository_busy_timeout_ms(config)
+    worker_identity_services = build_worker_identity_services(
+        config,
+        database_runtime,
+        credential_resolver,
+    )
+    worker_repository = (
+        worker_identity_services[0] if worker_identity_services is not None else None
+    )
+    worker_enrollment = (
+        worker_identity_services[1] if worker_identity_services is not None else None
+    )
+    distributed_config = config.distributed
+    worker_coordination = (
+        WorkerCoordinationService(
+            WorkerCoordinationRepository(
+                database_runtime,
+                heartbeat_timeout_seconds=distributed_config.heartbeat_timeout_seconds,
+                lease_seconds=distributed_config.lease_seconds,
+                max_worker_concurrency=distributed_config.max_worker_concurrency,
+                max_completion_bytes=distributed_config.max_completion_bytes,
+                busy_timeout_ms=busy_timeout_ms,
+            )
+        )
+        if distributed_config is not None
+        else None
+    )
+    worker_recovery = (
+        WorkerLeaseRecoveryDriver(
+            distributed_config.heartbeat_interval_seconds,
+            worker_coordination.expire,
+        )
+        if distributed_config is not None and worker_coordination is not None
+        else None
+    )
     repository = SQLiteApplicationRepository(
-        paths.database,
-        busy_timeout_ms=persistence.busy_timeout_ms,
+        database_runtime,
+        busy_timeout_ms=busy_timeout_ms,
     )
-    registry_lifecycle = ToolRegistryLifecycle(
-        paths.database, busy_timeout_ms=persistence.busy_timeout_ms
-    )
+    registry_lifecycle = ToolRegistryLifecycle(database_runtime, busy_timeout_ms=busy_timeout_ms)
     security = HTTPBearer(auto_error=False)
     security_dependency = Depends(security)
     daemon = config.daemon
@@ -475,8 +543,8 @@ def create_app(
         InspectionProfileLoader().load(inspection_source, paths.workspace)
     )
     run_repository = LocalRunRepository(
-        paths.database,
-        busy_timeout_ms=persistence.busy_timeout_ms,
+        database_runtime,
+        busy_timeout_ms=busy_timeout_ms,
         content_inspector=content_inspector,
     )
     scheduling_config = config.scheduling
@@ -487,8 +555,8 @@ def create_app(
     )
     schedule_repository = (
         SQLiteScheduleRepository(
-            paths.database,
-            busy_timeout_ms=persistence.busy_timeout_ms,
+            database_runtime,
+            busy_timeout_ms=busy_timeout_ms,
         )
         if scheduling_config is not None
         else None
@@ -499,13 +567,14 @@ def create_app(
         else None
     )
     artifacts = DurableArtifactService(
-        paths.database,
+        database_runtime,
         paths.artifacts,
         max_artifact_bytes=artifact_config.max_artifact_bytes,
         max_chunk_bytes=artifact_config.chunk_bytes,
-        busy_timeout_ms=persistence.busy_timeout_ms,
+        busy_timeout_ms=busy_timeout_ms,
         staging_ttl_seconds=artifact_config.staging_ttl_seconds,
         content_inspector=content_inspector,
+        body_store=build_artifact_body_store(config, paths, credential_resolver),
     )
     environment_repository: SQLiteEnvironmentRepository | None = None
     environment_observer: EnvironmentObserver | None = None
@@ -522,9 +591,9 @@ def create_app(
             paths.workspace,
         )
         environment_repository = SQLiteEnvironmentRepository(
-            paths.database,
+            database_runtime,
             artifacts=artifacts,
-            busy_timeout_ms=persistence.busy_timeout_ms,
+            busy_timeout_ms=busy_timeout_ms,
         )
         environment_observer = EnvironmentObserver(environment_profile)
         environment_resolver = EnvironmentResolver(
@@ -559,11 +628,9 @@ def create_app(
     skill_maintenance: SkillMaintenanceService | None = None
     if config.skills is not None:
         skill_lifecycle = SQLiteSkillLifecycleRepository(
-            paths.database, busy_timeout_ms=persistence.busy_timeout_ms
+            database_runtime, busy_timeout_ms=busy_timeout_ms
         )
-        skill_usage = SQLiteSkillUsageRepository(
-            paths.database, busy_timeout_ms=persistence.busy_timeout_ms
-        )
+        skill_usage = SQLiteSkillUsageRepository(database_runtime, busy_timeout_ms=busy_timeout_ms)
         skill_inspector = SkillPackageInspector(
             SkillInspectionProfileLoader().load(
                 config.skills.inspection_profile,
@@ -579,7 +646,7 @@ def create_app(
             max_automatic_skills=config.skills.max_automatic_skills,
         )
         skill_learning_repository = SQLiteSkillLearningRepository(
-            paths.database, busy_timeout_ms=persistence.busy_timeout_ms
+            database_runtime, busy_timeout_ms=busy_timeout_ms
         )
         skill_learning_service = SkillLearningService(
             skill_learning_repository,
@@ -600,22 +667,22 @@ def create_app(
             stale_after_days=config.skills.stale_after_days,
         )
     changes = ChangeSetService(
-        paths.database,
+        database_runtime,
         paths.workspace,
         artifacts,
-        busy_timeout_ms=persistence.busy_timeout_ms,
+        busy_timeout_ms=busy_timeout_ms,
         content_inspector=content_inspector,
     )
     git_effects = GovernedGitService(artifacts)
     session_config = config.sessions
     assert session_config is not None
     supervisor = SessionSupervisor(
-        paths.database,
+        database_runtime,
         paths.workspace,
         paths.sessions,
         session_config,
         artifacts,
-        busy_timeout_ms=persistence.busy_timeout_ms,
+        busy_timeout_ms=busy_timeout_ms,
         content_inspector=content_inspector,
     )
     supervisor.reconcile_all()
@@ -635,8 +702,8 @@ def create_app(
                 "daemon MCP mediation requires Web and inspection configuration",
             )
         mcp_repository = McpRepository(
-            paths.database,
-            busy_timeout_ms=persistence.busy_timeout_ms,
+            database_runtime,
+            busy_timeout_ms=busy_timeout_ms,
         )
         stdio_commands = dict(mcp_stdio_commands or {})
         if mcp_stdio_commands is None and any(
@@ -659,15 +726,14 @@ def create_app(
         )
         mcp_service.reconcile_after_restart()
         mcp_runner = McpServiceRunner(mcp_service)
-    credential_resolver = CredentialPoolResolver()
     knowledge_repository: SQLiteKnowledgeRepository | None = None
     knowledge_service: KnowledgeService | None = None
     knowledge_mutations: KnowledgeMutationService | None = None
     knowledge_tool_adapter: KnowledgeQueryToolAdapter | None = None
     if config.knowledge is not None:
         knowledge_repository = SQLiteKnowledgeRepository(
-            paths.database,
-            busy_timeout_ms=persistence.busy_timeout_ms,
+            database_runtime,
+            busy_timeout_ms=busy_timeout_ms,
         )
         knowledge_policy = DaemonKnowledgePolicy(config.knowledge, paths.workspace)
         knowledge_inspector = KnowledgeEvidenceInspector(
@@ -738,8 +804,8 @@ def create_app(
             inspector=knowledge_inspector,
             policy=knowledge_policy,
             accepted_results=SQLiteAcceptedResultVerifier(
-                paths.database,
-                busy_timeout_ms=persistence.busy_timeout_ms,
+                database_runtime,
+                busy_timeout_ms=busy_timeout_ms,
             ),
             graph_refresh=graph_refresh,
             credential_resolver=credential_resolver,
@@ -772,19 +838,19 @@ def create_app(
         CommunityCandidateLoader().load(config.community_candidate_sources, paths.workspace)
     )
     mission_repository = SQLiteMissionRepository(
-        paths.database,
-        busy_timeout_ms=persistence.busy_timeout_ms,
+        database_runtime,
+        busy_timeout_ms=busy_timeout_ms,
     )
     # Loading the daemon must not advance the public event cursor. The immutable
     # roster is persisted as reference data; explicit roster changes remain events.
     mission_repository.record_organization(load_canonical_organization(), emit_event=False)
     conversation_repository = SQLiteConversationRepository(
-        paths.database,
-        busy_timeout_ms=persistence.busy_timeout_ms,
+        database_runtime,
+        busy_timeout_ms=busy_timeout_ms,
     )
     professional_evolution = SQLiteProfessionalEvolutionRepository(
-        paths.database,
-        busy_timeout_ms=persistence.busy_timeout_ms,
+        database_runtime,
+        busy_timeout_ms=busy_timeout_ms,
     )
     mission_templates = MissionTemplateService(
         MissionTemplateLoader().load(config.mission_template_sources, paths.workspace)
@@ -1066,6 +1132,129 @@ def create_app(
                 if occurrence.state is OccurrenceState.PENDING:
                     schedule_driver.enqueue(occurrence.occurrence_id)
             return result
+        if command.command_type.startswith("worker."):
+            if worker_repository is None or distributed_config is None:
+                raise MishkanError(
+                    ErrorCode.REQUIRED_DEPENDENCY,
+                    "distributed worker identity is not configured",
+                )
+            if command.target_id is None:
+                raise MishkanError(ErrorCode.OUTPUT_CONTRACT, "worker command target is absent")
+            worker_target_id = UUID(command.target_id)
+
+            def apply_worker_mutation(
+                session: Session, _next_revision: int
+            ) -> tuple[dict[str, object], dict[str, object]]:
+                if command.command_type == "worker.enrollment.create":
+                    expires_at = utc_now() + timedelta(
+                        seconds=distributed_config.enrollment_ttl_seconds
+                    )
+                    worker_repository.create_enrollment_token_in_session(
+                        session,
+                        token_id=worker_target_id,
+                        token_digest=str(command.payload["token_digest"]),
+                        actor_id=command.actor_id,
+                        expires_at=expires_at,
+                    )
+                    payload: dict[str, object] = {
+                        "token_id": str(worker_target_id),
+                        "expires_at": expires_at.isoformat(),
+                    }
+                    return payload, {**payload, **_authorization_projection(authorized)}
+                if command.command_type == "worker.enrollment.revoke":
+                    changed = worker_repository.revoke_enrollment_token_in_session(
+                        session,
+                        worker_target_id,
+                    )
+                    payload = {"token_id": str(worker_target_id), "changed": changed}
+                    return payload, {**payload, **_authorization_projection(authorized)}
+                if command.command_type == "worker.revoke":
+                    if command.expected_revision is None:
+                        raise MishkanError(
+                            ErrorCode.OUTPUT_CONTRACT,
+                            "worker revocation requires an expected revision",
+                        )
+                    identity = worker_repository.revoke_worker_in_session(
+                        session,
+                        worker_target_id,
+                        expected_revision=command.expected_revision,
+                    )
+                    payload = identity.model_dump(mode="json")
+                    return payload, {
+                        "worker_id": str(identity.id),
+                        "state": identity.state.value,
+                        "revision": identity.revision,
+                        **_authorization_projection(authorized),
+                    }
+                if command.command_type == "worker.task.place":
+                    if worker_coordination is None or authorized.worker_placement is None:
+                        raise MishkanError(
+                            ErrorCode.OUTPUT_CONTRACT,
+                            "authorized worker placement is absent",
+                        )
+                    placement = worker_coordination.queue_in_session(
+                        session,
+                        authorized.worker_placement,
+                    )
+                    payload = placement.model_dump(mode="json")
+                    return payload, {
+                        "placement_id": str(placement.id),
+                        "run_id": str(placement.run_id),
+                        "task_id": placement.task_id,
+                        **_authorization_projection(authorized),
+                    }
+                if command.command_type == "worker.completion.accept":
+                    if (
+                        worker_coordination is None
+                        or authorized.worker_completion_result is None
+                        or authorized.worker_completion_review is None
+                    ):
+                        raise MishkanError(
+                            ErrorCode.OUTPUT_CONTRACT,
+                            "authorized worker completion acceptance is absent",
+                        )
+                    completion = worker_coordination.accept_completion(
+                        worker_target_id,
+                        authorized.worker_completion_result,
+                        authorized.worker_completion_review,
+                        session=session,
+                    )
+                    payload = completion.model_dump(mode="json")
+                    return payload, {
+                        "completion_id": str(completion.id),
+                        "envelope_id": str(completion.envelope_id),
+                        "state": completion.state.value,
+                        **_authorization_projection(authorized),
+                    }
+                raise MishkanError(ErrorCode.OUTPUT_CONTRACT, "unknown worker command")
+
+            event_types = {
+                "worker.enrollment.create": "worker.enrollment_token_created",
+                "worker.enrollment.revoke": "worker.enrollment_token_revoked",
+                "worker.revoke": "worker.revoked",
+                "worker.task.place": "worker.task_placement_accepted",
+                "worker.completion.accept": "worker.completion_acceptance_recorded",
+            }
+            async with command_lock:
+                try:
+                    return repository.accept_with_mutation(
+                        command,
+                        target_id=command.target_id,
+                        event_type=event_types[command.command_type],
+                        mutation=apply_worker_mutation,
+                        source="mishkand.worker_coordination",
+                    )
+                except MishkanError as error:
+                    return repository.refuse(
+                        command,
+                        target_id=command.target_id,
+                        error=error,
+                        event_payload={
+                            "command_type": command.command_type,
+                            **_authorization_projection(authorized),
+                            "error_code": error.envelope.code,
+                        },
+                    )
         resolved_credentials = _resolve_command_credentials(
             authorized,
             credential_resolver,
@@ -1325,7 +1514,7 @@ def create_app(
 
     mcp_http: McpHttpFacade | None = None
     if mcp_config is not None and mcp_config.facade.enabled:
-        schema_revision = SchemaManager(paths.database).status().head_revision
+        schema_revision = SchemaManager(database_runtime).status().head_revision
         router = McpFacadeRouter(
             mcp_config,
             repository,
@@ -1357,18 +1546,23 @@ def create_app(
         try:
             if schedule_driver is not None:
                 schedule_driver.start()
+            if worker_recovery is not None:
+                worker_recovery.start()
             if mcp_http is None:
                 yield
                 return
             async with mcp_http.lifespan():
                 yield
         finally:
+            if worker_recovery is not None:
+                await worker_recovery.stop()
             if schedule_driver is not None:
                 await schedule_driver.stop()
             for task in telemetry_tasks:
                 task.cancel()
             if mcp_runner is not None:
                 mcp_runner.close()
+            database_runtime.dispose()
 
     app = FastAPI(
         title="MISHKAN application API",
@@ -1406,8 +1600,374 @@ def create_app(
 
     @app.get("/v1/health")
     async def health() -> dict[str, str]:
-        status = SchemaManager(paths.database).status()
+        status = SchemaManager(database_runtime).status()
         return {"status": "ready", "schema": status.head_revision}
+
+    def authenticated_worker(request: Request) -> tuple[WorkerIdentity, str]:
+        if worker_enrollment is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker identity is not configured",
+            )
+        der = peer_certificate_der(request.scope)
+        certificate = x509.load_der_x509_certificate(der)
+        pem = certificate.public_bytes(serialization.Encoding.PEM).decode()
+        return worker_enrollment.authenticate_peer(pem)
+
+    @app.post("/v1/workers/enroll", response_model=WorkerCertificateBundle)
+    async def worker_enroll(request: WorkerEnrollmentRequest) -> WorkerCertificateBundle:
+        if worker_enrollment is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker enrollment is not configured",
+            )
+        return await _thread_call(worker_enrollment.enroll, request)
+
+    @app.get("/v1/workers/me", response_model=WorkerIdentity)
+    async def worker_me(request: Request) -> WorkerIdentity:
+        identity, _serial = await _thread_call(authenticated_worker, request)
+        return identity
+
+    @app.post(
+        "/v1/workers/certificate/rotate",
+        response_model=WorkerCertificateBundle,
+    )
+    async def worker_certificate_rotate(
+        rotation: WorkerCertificateRotationRequest,
+        request: Request,
+    ) -> WorkerCertificateBundle:
+        if worker_enrollment is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker identity is not configured",
+            )
+        der = peer_certificate_der(request.scope)
+        certificate = x509.load_der_x509_certificate(der)
+        pem = certificate.public_bytes(serialization.Encoding.PEM).decode()
+        identity, serial = await _thread_call(
+            worker_enrollment.authenticate_rotation_peer,
+            pem,
+            rotation.id,
+        )
+        return await _thread_call(
+            worker_enrollment.rotate,
+            WorkerRotationRequest(
+                id=rotation.id,
+                created_at=rotation.created_at,
+                worker_id=identity.id,
+                current_certificate_serial=serial,
+                certificate_signing_request_pem=rotation.certificate_signing_request_pem,
+            ),
+        )
+
+    @app.post("/v1/workers/heartbeat", response_model=WorkerHeartbeatRecord)
+    async def worker_heartbeat(
+        heartbeat: WorkerHeartbeat,
+        request: Request,
+    ) -> WorkerHeartbeatRecord:
+        if worker_coordination is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker coordination is not configured",
+            )
+        identity, _serial = await _thread_call(authenticated_worker, request)
+        if heartbeat.worker_id != identity.id:
+            raise MishkanError(
+                ErrorCode.AUTHORITY_NOT_GRANTED,
+                "worker heartbeat identity differs from its mTLS peer",
+            )
+        return await _thread_call(worker_coordination.heartbeat, heartbeat)
+
+    @app.post("/v1/workers/tasks/claim", response_model=WorkerTaskClaim | None)
+    async def worker_task_claim(
+        claim: WorkerClaimRequest,
+        request: Request,
+    ) -> WorkerTaskClaim | None:
+        if worker_coordination is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker coordination is not configured",
+            )
+        identity, _serial = await _thread_call(authenticated_worker, request)
+        return await _thread_call(worker_coordination.claim, identity.id, claim)
+
+    @app.post("/v1/workers/leases/{lease_id}/start", response_model=WorkerLease)
+    async def worker_lease_start(
+        lease_id: UUID,
+        request: Request,
+        lease_token: Annotated[
+            str,
+            Header(alias="X-Mishkan-Lease-Token", min_length=43, max_length=256),
+        ],
+    ) -> WorkerLease:
+        if worker_coordination is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker coordination is not configured",
+            )
+        identity, _serial = await _thread_call(authenticated_worker, request)
+        return await _thread_call(
+            worker_coordination.begin,
+            identity.id,
+            lease_id,
+            SecretStr(lease_token),
+        )
+
+    @app.post("/v1/workers/leases/{lease_id}/renew", response_model=WorkerLease)
+    async def worker_lease_renew(
+        lease_id: UUID,
+        request: Request,
+        expected_revision: Annotated[int, Query(ge=1)],
+        lease_token: Annotated[
+            str,
+            Header(alias="X-Mishkan-Lease-Token", min_length=43, max_length=256),
+        ],
+    ) -> WorkerLease:
+        if worker_coordination is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker coordination is not configured",
+            )
+        identity, _serial = await _thread_call(authenticated_worker, request)
+        return await _thread_call(
+            worker_coordination.renew,
+            identity.id,
+            lease_id,
+            SecretStr(lease_token),
+            expected_revision=expected_revision,
+        )
+
+    @app.post("/v1/workers/tasks/complete", response_model=WorkerCompletion)
+    async def worker_task_complete(
+        completion: WorkerCompletionSubmission,
+        request: Request,
+        lease_token: Annotated[
+            str,
+            Header(alias="X-Mishkan-Lease-Token", min_length=43, max_length=256),
+        ],
+    ) -> WorkerCompletion:
+        if worker_coordination is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker coordination is not configured",
+            )
+        identity, _serial = await _thread_call(authenticated_worker, request)
+        return await _thread_call(
+            worker_coordination.complete,
+            identity.id,
+            completion,
+            SecretStr(lease_token),
+        )
+
+    @app.get("/v1/workers/artifacts/{artifact_id}/content")
+    async def worker_input_artifact(
+        artifact_id: UUID,
+        request: Request,
+    ) -> StreamingResponse:
+        if worker_coordination is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker coordination is not configured",
+            )
+        identity, _serial = await _thread_call(authenticated_worker, request)
+        await _thread_call(
+            worker_coordination.authorize_input_artifact,
+            identity.id,
+            artifact_id,
+        )
+        manifest = await _thread_call(artifacts.manifest, f"artifact:{artifact_id}")
+
+        def body() -> Iterator[bytes]:
+            yield from artifacts.iter_bytes(
+                manifest.reference,
+                chunk_size=artifact_config.chunk_bytes,
+            )
+
+        return StreamingResponse(
+            body(),
+            media_type=manifest.detected_media_type or manifest.declared_media_type,
+            headers={
+                "Content-Length": str(manifest.size_bytes),
+                "X-Mishkan-Artifact-Digest": manifest.digest,
+            },
+        )
+
+    @app.post(
+        "/v1/workers/leases/{lease_id}/artifacts",
+        response_model=UploadSession,
+    )
+    async def worker_artifact_open(
+        lease_id: UUID,
+        upload_request: WorkerArtifactUploadRequest,
+        request: Request,
+        lease_token: Annotated[
+            str,
+            Header(alias="X-Mishkan-Lease-Token", min_length=43, max_length=256),
+        ],
+    ) -> UploadSession:
+        if worker_coordination is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker coordination is not configured",
+            )
+        identity, _serial = await _thread_call(authenticated_worker, request)
+        upload = await _thread_call(
+            artifacts.open_upload,
+            expected_size=upload_request.expected_size,
+            expected_digest=upload_request.expected_digest,
+            media_type=upload_request.media_type,
+            provenance=upload_request.provenance,
+            sensitivity=upload_request.sensitivity,
+            retention=upload_request.retention,
+        )
+        try:
+            await _thread_call(
+                worker_coordination.register_artifact_upload,
+                identity.id,
+                lease_id,
+                upload.upload_id,
+                upload_request,
+                SecretStr(lease_token),
+            )
+        except Exception:
+            await _thread_call(artifacts.abort_upload, upload.upload_id)
+            raise
+        return upload
+
+    @app.put(
+        "/v1/workers/artifact-uploads/{upload_id}",
+        response_model=UploadSession,
+    )
+    async def worker_artifact_chunk(
+        upload_id: UUID,
+        request: Request,
+        offset: Annotated[int, Query(ge=0)],
+        lease_token: Annotated[
+            str,
+            Header(alias="X-Mishkan-Lease-Token", min_length=43, max_length=256),
+        ],
+    ) -> UploadSession:
+        if worker_coordination is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker coordination is not configured",
+            )
+        identity, _serial = await _thread_call(authenticated_worker, request)
+        await _thread_call(
+            worker_coordination.authorize_artifact_upload,
+            identity.id,
+            upload_id,
+            SecretStr(lease_token),
+        )
+        content = bytearray()
+        async for chunk in request.stream():
+            if len(content) + len(chunk) > artifact_config.chunk_bytes:
+                raise MishkanError(
+                    ErrorCode.ARTIFACT,
+                    "worker artifact chunk exceeds configured backpressure",
+                )
+            content.extend(chunk)
+        return await _thread_call(
+            artifacts.append_chunk,
+            upload_id,
+            offset=offset,
+            content=bytes(content),
+        )
+
+    @app.post(
+        "/v1/workers/artifact-uploads/{upload_id}/commit",
+        response_model=ArtifactManifest,
+    )
+    async def worker_artifact_commit(
+        upload_id: UUID,
+        request: Request,
+        lease_token: Annotated[
+            str,
+            Header(alias="X-Mishkan-Lease-Token", min_length=43, max_length=256),
+        ],
+    ) -> ArtifactManifest:
+        if worker_coordination is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker coordination is not configured",
+            )
+        identity, _serial = await _thread_call(authenticated_worker, request)
+        secret = SecretStr(lease_token)
+        await _thread_call(
+            worker_coordination.authorize_artifact_upload,
+            identity.id,
+            upload_id,
+            secret,
+        )
+        manifest = await _thread_call(artifacts.commit_upload, upload_id)
+        await _thread_call(
+            worker_coordination.complete_artifact_upload,
+            identity.id,
+            upload_id,
+            manifest.id,
+            secret,
+        )
+        return manifest
+
+    @app.get("/v1/workers", response_model=None)
+    async def worker_list(
+        _principal: TokenRecord = authenticated,
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=10_000)] = 100,
+    ) -> tuple[dict[str, object], ...]:
+        if worker_repository is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker identity is not configured",
+            )
+        identities = await _thread_call(
+            worker_repository.identities,
+            offset=offset,
+            limit=limit,
+        )
+        return tuple(identity.model_dump(mode="json") for identity in identities)
+
+    @app.get("/v1/workers/status", response_model=None)
+    async def worker_status_list(
+        _principal: TokenRecord = authenticated,
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=10_000)] = 100,
+    ) -> tuple[dict[str, object], ...]:
+        if worker_coordination is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker coordination is not configured",
+            )
+        statuses = await _thread_call(
+            worker_coordination.statuses,
+            offset=offset,
+            limit=limit,
+        )
+        return tuple(status.model_dump(mode="json") for status in statuses)
+
+    @app.get("/v1/workers/{worker_id}/status", response_model=WorkerStatus)
+    async def worker_status_get(
+        worker_id: UUID,
+        _principal: TokenRecord = authenticated,
+    ) -> WorkerStatus:
+        if worker_coordination is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker coordination is not configured",
+            )
+        return await _thread_call(worker_coordination.status, worker_id)
+
+    @app.get("/v1/workers/{worker_id}", response_model=WorkerIdentity)
+    async def worker_get(
+        worker_id: UUID,
+        _principal: TokenRecord = authenticated,
+    ) -> WorkerIdentity:
+        if worker_repository is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker identity is not configured",
+            )
+        return await _thread_call(worker_repository.identity, worker_id)
 
     @app.post("/v1/commands", response_model=CommandResult)
     async def command(
@@ -1459,6 +2019,20 @@ def create_app(
                 "corpora": [item.model_dump(mode="json") for item in corpora],
                 "degraded": any(item.state.value in {"degraded", "failed"} for item in corpora)
                 or any(item.state is KnowledgeQueryState.DEGRADED for item in queries),
+            }
+        if worker_coordination is not None:
+            worker_statuses = await _thread_call(
+                worker_coordination.statuses,
+                limit=daemon.event_page_limit,
+            )
+            projections["workers"] = {
+                "items": [item.model_dump(mode="json") for item in worker_statuses],
+                "online": sum(item.availability.value == "online" for item in worker_statuses),
+                "stale": sum(item.availability.value == "stale" for item in worker_statuses),
+                "revoked": sum(item.availability.value == "revoked" for item in worker_statuses),
+                "never_seen": sum(
+                    item.availability.value == "never_seen" for item in worker_statuses
+                ),
             }
         return current.model_copy(update={"projections": projections})
 

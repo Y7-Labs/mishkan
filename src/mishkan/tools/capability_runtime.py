@@ -14,8 +14,10 @@ from mishkan.browser import (
     playwright_chromium_ready,
 )
 from mishkan.config.models import MishkanConfig
+from mishkan.daemon.composition import repository_busy_timeout_ms
 from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.edits.git import GovernedGitService
+from mishkan.persistence.runtime import DatabaseTarget
 from mishkan.policy.models import EffectivePolicy
 from mishkan.tools.adapters import CapabilityAdapter
 from mishkan.tools.git import build_git_adapters
@@ -59,7 +61,7 @@ class CapabilityRuntime:
 
 def build_capability_runtime(
     config: MishkanConfig,
-    database: Path,
+    database: DatabaseTarget,
     workspace: Path,
     artifacts: DurableArtifactService,
     inspector: ContentInspector,
@@ -71,6 +73,7 @@ def build_capability_runtime(
     persistence = config.persistence
     if web_config is None or browser_config is None or persistence is None:
         raise MishkanError(ErrorCode.CONFIGURATION, "capability configuration is incomplete")
+    busy_timeout_ms = repository_busy_timeout_ms(config)
 
     transport = HttpxWebTransport()
     search_adapters: dict[str, SearchAdapter] = {}
@@ -94,7 +97,7 @@ def build_capability_runtime(
         search_adapters=search_adapters,
         extraction_adapters=extraction_adapters,
         transport=transport,
-        cache=SQLiteWebCache(database, busy_timeout_ms=persistence.busy_timeout_ms),
+        cache=SQLiteWebCache(database, busy_timeout_ms=busy_timeout_ms),
         content_inspector=inspector,
     )
     adapters = build_web_tool_adapters(web_config, web_service)
@@ -121,7 +124,7 @@ def build_capability_runtime(
             artifacts,
             {browser.adapter_id: browser},
             inspector,
-            busy_timeout_ms=persistence.busy_timeout_ms,
+            busy_timeout_ms=busy_timeout_ms,
         )
         # Reconcile handles lost by a prior daemon/runtime interruption before
         # exposing any Browser adapter to a new CrewAI run.

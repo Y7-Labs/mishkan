@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -32,6 +31,7 @@ from mishkan.events import (
     EventRetentionPolicy,
 )
 from mishkan.persistence.migration import SchemaManager
+from mishkan.persistence.runtime import DatabaseTarget
 from mishkan.persistence.sqlite import (
     AggregateRevisionRow,
     CommandRow,
@@ -48,7 +48,7 @@ from mishkan.runtime import RunState
 class SQLiteApplicationRepository:
     """Own command idempotence, optimistic revisions, and the durable event cursor."""
 
-    def __init__(self, database_path: Path, *, busy_timeout_ms: int = 5_000) -> None:
+    def __init__(self, database_path: DatabaseTarget, *, busy_timeout_ms: int = 5_000) -> None:
         SchemaManager(database_path).require_current()
         self._engine = create_local_engine(
             database_path,

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -27,6 +26,7 @@ from mishkan.knowledge.models import (
     KnowledgeSourceAttempt,
 )
 from mishkan.persistence.migration import SchemaManager
+from mishkan.persistence.runtime import DatabaseTarget
 from mishkan.persistence.sqlite import (
     ArtifactRow,
     KnowledgeCorpusRow,
@@ -76,7 +76,7 @@ _OPERATION_TRANSITIONS: dict[KnowledgeOperationState, frozenset[KnowledgeOperati
 
 
 class SQLiteKnowledgeRepository:
-    def __init__(self, database_path: Path, *, busy_timeout_ms: int = 5_000) -> None:
+    def __init__(self, database_path: DatabaseTarget, *, busy_timeout_ms: int = 5_000) -> None:
         SchemaManager(database_path).require_current()
         self._engine = create_local_engine(database_path, busy_timeout_ms=busy_timeout_ms)
 

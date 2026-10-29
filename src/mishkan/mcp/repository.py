@@ -6,7 +6,6 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import ClassVar
 from uuid import UUID
 
@@ -28,6 +27,7 @@ from mishkan.mcp.models import (
     McpProgressEvent,
 )
 from mishkan.persistence.migration import SchemaManager
+from mishkan.persistence.runtime import DatabaseTarget
 from mishkan.persistence.sqlite import (
     McpCallRow,
     McpConnectionRow,
@@ -99,7 +99,7 @@ class McpRepository:
         }
     )
 
-    def __init__(self, database: Path, *, busy_timeout_ms: int = 5_000) -> None:
+    def __init__(self, database: DatabaseTarget, *, busy_timeout_ms: int = 5_000) -> None:
         SchemaManager(database).require_current()
         self._engine = create_local_engine(database, busy_timeout_ms=busy_timeout_ms)
 
