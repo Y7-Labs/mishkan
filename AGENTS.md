@@ -43,8 +43,13 @@ promoted to `main` at `6a864ec`; the seven-job integration matrix passed. D-049 
 Distributed Execution on `feat/i09-distributed-execution` with PostgreSQL metadata, S3-compatible
 artifact bodies, individually revocable mTLS worker identities, immutable task envelopes, remote
 CrewAI task execution, reconciled stateful effects, and at-most-once durable result acceptance.
-I10 and later increments remain unauthorized.
-The rejected
+I09 is accepted by D-050 at `00f8ce6` after the local deterministic and branch-coverage gates and
+the eight-job Linux/macOS Python 3.11–3.13 matrix passed. The accepted boundary includes explicit
+PostgreSQL/S3 distributed mode, individually revocable mTLS workers, immutable CrewAI task
+envelopes, capability-aware placement, renewable leases, loss recovery, durable artifact/result
+delivery, and at-most-once accepted completion. I09 may be promoted topic-to-`develop`; I10 and
+later increments remain unauthorized until an explicit engineer decision after that integration
+gate. The rejected
 universal workflow, mandatory outcome catalogue, capability-family matrix, static role/tool matrix,
 competing runtime, and private operational deny-list must not return.
 
