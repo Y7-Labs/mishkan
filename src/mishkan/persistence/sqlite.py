@@ -1039,20 +1039,12 @@ class RemoteTaskPlacementRow(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), nullable=False)
-    task_row_id: Mapped[str] = mapped_column(
-        ForeignKey("tasks.id"), unique=True, nullable=False
-    )
+    task_row_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), unique=True, nullable=False)
     task_key: Mapped[str] = mapped_column(String(64), nullable=False)
     state: Mapped[str] = mapped_column(String(32), nullable=False)
-    preferred_worker_id: Mapped[str | None] = mapped_column(
-        ForeignKey("worker_identities.id")
-    )
-    selected_worker_id: Mapped[str | None] = mapped_column(
-        ForeignKey("worker_identities.id")
-    )
-    current_envelope_id: Mapped[str | None] = mapped_column(
-        ForeignKey("remote_task_envelopes.id")
-    )
+    preferred_worker_id: Mapped[str | None] = mapped_column(ForeignKey("worker_identities.id"))
+    selected_worker_id: Mapped[str | None] = mapped_column(ForeignKey("worker_identities.id"))
+    current_envelope_id: Mapped[str | None] = mapped_column(ForeignKey("remote_task_envelopes.id"))
     request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     request_payload: Mapped[str] = mapped_column(Text, nullable=False)
     revision: Mapped[int] = mapped_column(Integer, nullable=False)
