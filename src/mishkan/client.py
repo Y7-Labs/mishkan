@@ -156,6 +156,7 @@ from mishkan.workers.models import (
     RemotePlacement,
     RemotePlacementRequest,
     WorkerIdentity,
+    WorkerStatus,
 )
 
 
@@ -1770,6 +1771,23 @@ class WorkerAdminClient:
         )
         response.raise_for_status()
         return WorkerIdentity.model_validate(response.json())
+
+    def statuses(self, *, offset: int = 0, limit: int = 100) -> tuple[WorkerStatus, ...]:
+        response = self._client._client.get(
+            "/v1/workers/status",
+            headers=self._client._headers(),
+            params={"offset": offset, "limit": limit},
+        )
+        response.raise_for_status()
+        return tuple(WorkerStatus.model_validate(item) for item in response.json())
+
+    def status(self, worker_id: UUID) -> WorkerStatus:
+        response = self._client._client.get(
+            f"/v1/workers/{worker_id}/status",
+            headers=self._client._headers(),
+        )
+        response.raise_for_status()
+        return WorkerStatus.model_validate(response.json())
 
     def revoke(self, worker_id: UUID, *, expected_revision: int) -> WorkerIdentity:
         result = self._client.command(

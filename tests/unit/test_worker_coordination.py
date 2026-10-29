@@ -313,6 +313,34 @@ def test_heartbeat_is_monotone_and_capability_placement_is_contextual(tmp_path: 
     assert stale.value.envelope.code is ErrorCode.REVISION_MISMATCH
 
 
+def test_worker_statuses_expose_never_seen_online_stale_and_revoked(tmp_path: Path) -> None:
+    database, _runs, coordination, service, _run_id, _task_row_id, worker_id = _setup(tmp_path)
+    unseen_worker = _worker(database)
+
+    current = coordination.worker_status(worker_id)
+    unseen = coordination.worker_status(unseen_worker)
+    assert current.heartbeat is not None
+    stale = coordination.worker_status(
+        worker_id,
+        now=current.heartbeat.expires_at + timedelta(seconds=1),
+    )
+    with Session(create_local_engine(database)) as session, session.begin():
+        row = session.get(WorkerIdentityRow, str(worker_id))
+        assert row is not None
+        row.state = "revoked"
+        row.revision += 1
+        row.revoked_at = utc_now().isoformat()
+        row.updated_at = row.revoked_at
+    revoked = coordination.worker_status(worker_id)
+
+    assert current.availability is WorkerAvailability.ONLINE
+    assert unseen.availability is WorkerAvailability.NEVER_SEEN
+    assert unseen.heartbeat is None
+    assert stale.availability is WorkerAvailability.STALE
+    assert revoked.availability is WorkerAvailability.REVOKED
+    assert {item.identity.id for item in service.statuses()} == {worker_id, unseen_worker}
+
+
 def test_pull_claim_is_atomic_idempotent_and_keeps_worker_secret_local(
     tmp_path: Path,
 ) -> None:

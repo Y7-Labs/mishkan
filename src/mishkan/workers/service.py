@@ -33,6 +33,7 @@ from mishkan.workers.models import (
     WorkerLease,
     WorkerLeaseGrant,
     WorkerRotationRequest,
+    WorkerStatus,
     WorkerTaskClaim,
 )
 from mishkan.workers.pki import SignedWorkerCertificate, WorkerCertificateAuthority
@@ -177,6 +178,12 @@ class WorkerCoordinationService:
         resources: TaskResourceLimits,
     ) -> tuple[WorkerHeartbeatRecord, ...]:
         return self._repository.compatible_workers(requirements, resources)
+
+    def status(self, worker_id: UUID) -> WorkerStatus:
+        return self._repository.worker_status(worker_id)
+
+    def statuses(self, *, offset: int = 0, limit: int = 100) -> tuple[WorkerStatus, ...]:
+        return self._repository.worker_statuses(offset=offset, limit=limit)
 
     def queue(self, request: RemotePlacementRequest) -> RemotePlacement:
         return self._repository.queue_placement(request)

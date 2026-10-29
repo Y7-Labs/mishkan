@@ -252,6 +252,7 @@ from mishkan.workers.models import (
     WorkerIdentity,
     WorkerLease,
     WorkerRotationRequest,
+    WorkerStatus,
     WorkerTaskClaim,
 )
 from mishkan.workers.recovery import WorkerLeaseRecoveryDriver
@@ -1902,6 +1903,36 @@ def create_app(
         )
         return tuple(identity.model_dump(mode="json") for identity in identities)
 
+    @app.get("/v1/workers/status", response_model=None)
+    async def worker_status_list(
+        _principal: TokenRecord = authenticated,
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=10_000)] = 100,
+    ) -> tuple[dict[str, object], ...]:
+        if worker_coordination is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker coordination is not configured",
+            )
+        statuses = await _thread_call(
+            worker_coordination.statuses,
+            offset=offset,
+            limit=limit,
+        )
+        return tuple(status.model_dump(mode="json") for status in statuses)
+
+    @app.get("/v1/workers/{worker_id}/status", response_model=WorkerStatus)
+    async def worker_status_get(
+        worker_id: UUID,
+        _principal: TokenRecord = authenticated,
+    ) -> WorkerStatus:
+        if worker_coordination is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker coordination is not configured",
+            )
+        return await _thread_call(worker_coordination.status, worker_id)
+
     @app.get("/v1/workers/{worker_id}", response_model=WorkerIdentity)
     async def worker_get(
         worker_id: UUID,
@@ -1964,6 +1995,20 @@ def create_app(
                 "corpora": [item.model_dump(mode="json") for item in corpora],
                 "degraded": any(item.state.value in {"degraded", "failed"} for item in corpora)
                 or any(item.state is KnowledgeQueryState.DEGRADED for item in queries),
+            }
+        if worker_coordination is not None:
+            worker_statuses = await _thread_call(
+                worker_coordination.statuses,
+                limit=daemon.event_page_limit,
+            )
+            projections["workers"] = {
+                "items": [item.model_dump(mode="json") for item in worker_statuses],
+                "online": sum(item.availability.value == "online" for item in worker_statuses),
+                "stale": sum(item.availability.value == "stale" for item in worker_statuses),
+                "revoked": sum(item.availability.value == "revoked" for item in worker_statuses),
+                "never_seen": sum(
+                    item.availability.value == "never_seen" for item in worker_statuses
+                ),
             }
         return current.model_copy(update={"projections": projections})
 

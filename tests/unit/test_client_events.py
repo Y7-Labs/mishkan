@@ -253,6 +253,48 @@ def test_worker_sdk_keeps_one_time_secret_out_of_the_command(
     assert commands[0]["payload"] == {"token_digest": hashlib.sha256(secret.encode()).hexdigest()}
 
 
+def test_worker_sdk_exposes_bounded_availability_status(tmp_path: Path) -> None:
+    token_file = tmp_path / "token.json"
+    TokenFile(token_file).create("CTO")
+    worker_id = uuid4()
+    now = datetime.now(UTC).isoformat()
+    status = {
+        "identity": {
+            "id": str(worker_id),
+            "created_at": now,
+            "display_name": "worker-without-heartbeat",
+            "state": "active",
+            "current_certificate_serial": None,
+            "revision": 1,
+            "updated_at": now,
+            "revoked_at": None,
+        },
+        "availability": "never_seen",
+        "heartbeat": None,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"].startswith("Bearer ")
+        if request.url.path == "/v1/workers/status":
+            assert dict(request.url.params) == {"offset": "2", "limit": "3"}
+            return httpx.Response(200, json=[status])
+        assert request.url.path == f"/v1/workers/{worker_id}/status"
+        return httpx.Response(200, json=status)
+
+    with Mishkan("http://mishkand.test", token_file=token_file) as client:
+        client._client.close()
+        client._client = httpx.Client(
+            base_url="http://mishkand.test",
+            transport=httpx.MockTransport(handler),
+        )
+        listed = client.workers.statuses(offset=2, limit=3)
+        observed = client.workers.status(worker_id)
+
+    assert listed == (observed,)
+    assert observed.identity.id == worker_id
+    assert observed.availability.value == "never_seen"
+
+
 def test_sdk_bounded_query_surfaces_use_authenticated_versioned_routes(tmp_path: Path) -> None:
     token_file = tmp_path / "token.json"
     credential = TokenFile(token_file).create("operator")

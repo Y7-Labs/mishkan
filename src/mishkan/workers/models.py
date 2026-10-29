@@ -35,6 +35,7 @@ class CertificateState(StrEnum):
 
 
 class WorkerAvailability(StrEnum):
+    NEVER_SEEN = "never_seen"
     ONLINE = "online"
     STALE = "stale"
     REVOKED = "revoked"
@@ -525,6 +526,29 @@ class WorkerIdentity(DomainRecord):
     @classmethod
     def timestamps_are_aware(cls, value: datetime | None) -> datetime | None:
         return require_aware(value) if value is not None else None
+
+
+class WorkerStatus(WorkerValueModel):
+    """Bounded administrative projection; an observed capability grants no authority."""
+
+    identity: WorkerIdentity
+    availability: WorkerAvailability
+    heartbeat: WorkerHeartbeatRecord | None = None
+
+    @model_validator(mode="after")
+    def status_is_consistent(self) -> Self:
+        expected = (
+            WorkerAvailability.REVOKED
+            if self.identity.state is WorkerState.REVOKED
+            else (
+                self.heartbeat.availability
+                if self.heartbeat is not None
+                else WorkerAvailability.NEVER_SEEN
+            )
+        )
+        if self.availability is not expected:
+            raise ValueError("worker status availability is inconsistent")
+        return self
 
 
 class IssuedWorkerCertificate(DomainRecord):

@@ -54,9 +54,11 @@ from mishkan.workers.models import (
     WorkerCompletionSubmission,
     WorkerHeartbeat,
     WorkerHeartbeatRecord,
+    WorkerIdentity,
     WorkerLease,
     WorkerLeaseState,
     WorkerState,
+    WorkerStatus,
     WorkerTaskClaim,
 )
 
@@ -171,6 +173,45 @@ class WorkerCoordinationRepository:
             if worker is None or row is None:
                 raise MishkanError(ErrorCode.WORKER, "worker heartbeat does not exist")
             return self._heartbeat_record(row, worker.state, observed_now)
+
+    def worker_status(
+        self,
+        worker_id: UUID,
+        *,
+        now: datetime | None = None,
+    ) -> WorkerStatus:
+        observed_now = require_aware(now) if now is not None else utc_now()
+        with Session(self._engine) as session:
+            worker = session.get(WorkerIdentityRow, str(worker_id))
+            if worker is None:
+                raise MishkanError(ErrorCode.WORKER, "worker identity does not exist")
+            heartbeat = session.get(WorkerHeartbeatRow, str(worker_id))
+            return self._worker_status(worker, heartbeat, observed_now)
+
+    def worker_statuses(
+        self,
+        *,
+        offset: int = 0,
+        limit: int = 100,
+        now: datetime | None = None,
+    ) -> tuple[WorkerStatus, ...]:
+        if offset < 0 or limit < 1 or limit > 10_000:
+            raise MishkanError(ErrorCode.OUTPUT_CONTRACT, "worker status bounds are invalid")
+        observed_now = require_aware(now) if now is not None else utc_now()
+        with Session(self._engine) as session:
+            rows = session.execute(
+                select(WorkerIdentityRow, WorkerHeartbeatRow)
+                .outerjoin(
+                    WorkerHeartbeatRow,
+                    WorkerHeartbeatRow.worker_id == WorkerIdentityRow.id,
+                )
+                .order_by(WorkerIdentityRow.created_at, WorkerIdentityRow.id)
+                .offset(offset)
+                .limit(limit)
+            ).all()
+            return tuple(
+                self._worker_status(worker, heartbeat, observed_now) for worker, heartbeat in rows
+            )
 
     def compatible_workers(
         self,
@@ -1459,6 +1500,42 @@ class WorkerCoordinationRepository:
             observed_at=datetime.fromisoformat(row.observed_at),
             expires_at=datetime.fromisoformat(row.expires_at),
             availability=availability,
+        )
+
+    @staticmethod
+    def _worker_status(
+        worker: WorkerIdentityRow,
+        heartbeat: WorkerHeartbeatRow | None,
+        now: datetime,
+    ) -> WorkerStatus:
+        identity = WorkerIdentity(
+            id=UUID(worker.id),
+            created_at=datetime.fromisoformat(worker.created_at),
+            display_name=worker.display_name,
+            state=WorkerState(worker.state),
+            current_certificate_serial=worker.current_certificate_serial,
+            revision=worker.revision,
+            updated_at=datetime.fromisoformat(worker.updated_at),
+            revoked_at=(datetime.fromisoformat(worker.revoked_at) if worker.revoked_at else None),
+        )
+        heartbeat_record = (
+            WorkerCoordinationRepository._heartbeat_record(heartbeat, worker.state, now)
+            if heartbeat is not None
+            else None
+        )
+        availability = (
+            WorkerAvailability.REVOKED
+            if identity.state is WorkerState.REVOKED
+            else (
+                heartbeat_record.availability
+                if heartbeat_record is not None
+                else WorkerAvailability.NEVER_SEEN
+            )
+        )
+        return WorkerStatus(
+            identity=identity,
+            availability=availability,
+            heartbeat=heartbeat_record,
         )
 
     @staticmethod

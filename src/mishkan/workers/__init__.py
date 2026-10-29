@@ -36,6 +36,7 @@ from mishkan.workers.models import (
     WorkerResourceSnapshot,
     WorkerRuntimeProfile,
     WorkerState,
+    WorkerStatus,
     WorkerTaskClaim,
 )
 from mishkan.workers.pki import WorkerCertificateAuthority
@@ -88,5 +89,6 @@ __all__ = [
     "WorkerResourceSnapshot",
     "WorkerRuntimeProfile",
     "WorkerState",
+    "WorkerStatus",
     "WorkerTaskClaim",
 ]
