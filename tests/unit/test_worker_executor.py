@@ -152,3 +152,35 @@ def test_remote_executor_enforces_immutable_result_bound(
 
     with pytest.raises(MishkanError, match="all configured CrewAI worker model candidates failed"):
         executor.execute(_envelope(max_result_bytes=1), {})
+
+
+def test_remote_executor_refuses_invalid_inputs_before_model_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executor = CrewAIWorkerTaskExecutor(
+        _config(),
+        model_route="simple",
+        max_input_bytes=1,
+    )
+    envelope = _envelope()
+    monkeypatch.setattr(
+        executor._models,
+        "candidates_for",
+        lambda _route, **_kwargs: pytest.fail("model routing must not run"),
+    )
+
+    with pytest.raises(MishkanError, match="inputs differ"):
+        executor.execute(envelope, {"unexpected": b"evidence"})
+
+    expired = envelope.model_copy(update={"deadline": utc_now() - timedelta(seconds=1)})
+    with pytest.raises(MishkanError, match="deadline has expired"):
+        executor.execute(expired, {})
+
+
+def test_remote_executor_rejects_an_invalid_input_bound() -> None:
+    with pytest.raises(MishkanError, match="input bound is invalid"):
+        CrewAIWorkerTaskExecutor(
+            _config(),
+            model_route="simple",
+            max_input_bytes=0,
+        )
