@@ -39,6 +39,7 @@
     },
     "WorkerAvailability": {
       "enum": [
+        "never_seen",
         "online",
         "stale",
         "revoked"

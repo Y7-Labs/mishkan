@@ -8,6 +8,63 @@
       ],
       "title": "EffectReportState",
       "type": "string"
+    },
+    "WorkerArtifactKind": {
+      "enum": [
+        "output",
+        "unified_patch",
+        "effect_evidence"
+      ],
+      "title": "WorkerArtifactKind",
+      "type": "string"
+    },
+    "WorkerGeneratedArtifact": {
+      "additionalProperties": false,
+      "description": "Lease-local bytes awaiting upload; the coordinator assigns the artifact identity.",
+      "properties": {
+        "content_base64": {
+          "maxLength": 1431655768,
+          "minLength": 1,
+          "title": "Content Base64",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/WorkerArtifactKind",
+          "default": "output"
+        },
+        "media_type": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Media Type",
+          "type": "string"
+        },
+        "name": {
+          "pattern": "^[a-z][a-z0-9_.-]{1,127}$",
+          "title": "Name",
+          "type": "string"
+        },
+        "retention": {
+          "default": "run",
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Retention",
+          "type": "string"
+        },
+        "sensitivity": {
+          "default": "internal",
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Sensitivity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "media_type",
+        "content_base64"
+      ],
+      "title": "WorkerGeneratedArtifact",
+      "type": "object"
     }
   },
   "additionalProperties": false,
@@ -34,6 +91,14 @@
     "effect_report": {
       "$ref": "#/$defs/EffectReportState",
       "default": "not_applicable"
+    },
+    "generated_artifacts": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/WorkerGeneratedArtifact"
+      },
+      "title": "Generated Artifacts",
+      "type": "array"
     },
     "result": {
       "additionalProperties": true,

@@ -71,6 +71,13 @@
   "additionalProperties": false,
   "description": "Public process behavior and observed capabilities for one worker location.",
   "properties": {
+    "artifact_chunk_bytes": {
+      "default": 1048576,
+      "maximum": 67108864,
+      "minimum": 1,
+      "title": "Artifact Chunk Bytes",
+      "type": "integer"
+    },
     "capabilities": {
       "items": {
         "$ref": "#/$defs/CapabilityObservation"
