@@ -796,6 +796,59 @@ def test_event_signals_derive_flow_rejection_and_rework_without_model_inference(
     )
 
 
+def test_execution_location_does_not_change_authoritative_team_evidence(
+    tmp_path: Path,
+) -> None:
+    _, _, mission, brief, crew = _mission_context(tmp_path)
+    plan = _plan(mission, brief, crew)
+    observed_at = utc_now()
+    event_id = new_id()
+
+    def claimed(execution_location: str) -> EventEnvelope:
+        return EventEnvelope(
+            event_id=event_id,
+            cursor=1,
+            event_type="task.claimed",
+            source="mishkand",
+            entity_type="run",
+            entity_id="run-1",
+            run_id="run-1",
+            task_id="task-1",
+            occurred_at=observed_at,
+            sensitivity="internal",
+            payload={
+                "task_id": "task-1",
+                "attempt": 2,
+                "execution_location": execution_location,
+            },
+        )
+
+    thresholds = {
+        "blocked_time_seconds": 60,
+        "queue_time_seconds": 60,
+        "repeated_rejections": 2,
+        "duplicate_work": 1,
+        "missing_handoffs": 1,
+        "workload_share": 0.75,
+    }
+    local = TeamSignalDetector.detect_events(
+        plan,
+        (claimed("daemon:local"),),
+        {"task-1": "implement-recovery"},
+        signal_thresholds=thresholds,
+    )
+    distributed = TeamSignalDetector.detect_events(
+        plan,
+        (claimed("worker:remote-1"),),
+        {"task-1": "implement-recovery"},
+        signal_thresholds=thresholds,
+    )
+
+    assert local == distributed
+    assert local[0].kind == "rework"
+    assert local[0].evidence_references == (f"event:{event_id}",)
+
+
 def test_repository_persists_immutable_lineage_signals_and_handoffs(tmp_path: Path) -> None:
     database, missions, mission, brief, crew = _mission_context(tmp_path)
     repository = SQLiteTeamEffectivenessRepository(database)
