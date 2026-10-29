@@ -6,14 +6,17 @@ import base64
 import hashlib
 import json
 import os
+import secrets
+import ssl
 import tempfile
 from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
+from pydantic import SecretStr
 
 from mishkan.application import (
     ApplicationCommand,
@@ -125,6 +128,7 @@ from mishkan.organization import (
     ProfessionalPromotionDisposition,
     ProfessionalPromotionRequest,
 )
+from mishkan.planning.models import InitializationResult, ReviewDecision
 from mishkan.scheduling import (
     OccurrenceSource,
     ScheduleCreateRequest,
@@ -148,6 +152,14 @@ from mishkan.telemetry.models import (
     TelemetryEvaluationImportResult,
     TelemetryStatus,
 )
+from mishkan.workers.models import (
+    EnrollmentCredential,
+    RemotePlacement,
+    RemotePlacementRequest,
+    WorkerCompletion,
+    WorkerIdentity,
+    WorkerStatus,
+)
 
 
 class Mishkan:
@@ -157,9 +169,14 @@ class Mishkan:
         *,
         token_file: Path,
         timeout_seconds: float = 120,
+        verify: ssl.SSLContext | str | bool = True,
     ) -> None:
         self._token_file = TokenFile(token_file)
-        self._client = httpx.Client(base_url=base_url.rstrip("/"), timeout=timeout_seconds)
+        self._client = httpx.Client(
+            base_url=base_url.rstrip("/"),
+            timeout=timeout_seconds,
+            verify=verify,
+        )
 
     def close(self) -> None:
         self._client.close()
@@ -194,6 +211,10 @@ class Mishkan:
     @property
     def schedules(self) -> ScheduleClient:
         return ScheduleClient(self)
+
+    @property
+    def workers(self) -> WorkerAdminClient:
+        return WorkerAdminClient(self)
 
     def command(self, command: ApplicationCommand) -> CommandResult:
         response = self._client.post(
@@ -1701,6 +1722,121 @@ class Mishkan:
         return {"Authorization": f"Bearer {self._token_file.read().token}"}
 
 
+class WorkerAdminClient:
+    """Bearer-authenticated administration of one-time credentials and workers."""
+
+    def __init__(self, client: Mishkan) -> None:
+        self._client = client
+
+    def create_enrollment(self) -> EnrollmentCredential:
+        secret = secrets.token_urlsafe(48)
+        token_id = uuid4()
+        result = self._client.command(
+            ApplicationCommand(
+                command_type="worker.enrollment.create",
+                actor_id=self._client.principal_id,
+                target_type="worker_enrollment",
+                target_id=str(token_id),
+                payload={"token_digest": hashlib.sha256(secret.encode()).hexdigest()},
+            )
+        )
+        return EnrollmentCredential(
+            id=token_id,
+            token=SecretStr(secret),
+            expires_at=datetime.fromisoformat(str(result.payload["expires_at"])),
+        )
+
+    def revoke_enrollment(self, token_id: UUID) -> None:
+        self._client.command(
+            ApplicationCommand(
+                command_type="worker.enrollment.revoke",
+                actor_id=self._client.principal_id,
+                target_type="worker_enrollment",
+                target_id=str(token_id),
+                payload={},
+            )
+        )
+
+    def list(self, *, offset: int = 0, limit: int = 100) -> tuple[WorkerIdentity, ...]:
+        response = self._client._client.get(
+            "/v1/workers",
+            headers=self._client._headers(),
+            params={"offset": offset, "limit": limit},
+        )
+        response.raise_for_status()
+        return tuple(WorkerIdentity.model_validate(item) for item in response.json())
+
+    def get(self, worker_id: UUID) -> WorkerIdentity:
+        response = self._client._client.get(
+            f"/v1/workers/{worker_id}",
+            headers=self._client._headers(),
+        )
+        response.raise_for_status()
+        return WorkerIdentity.model_validate(response.json())
+
+    def statuses(self, *, offset: int = 0, limit: int = 100) -> tuple[WorkerStatus, ...]:
+        response = self._client._client.get(
+            "/v1/workers/status",
+            headers=self._client._headers(),
+            params={"offset": offset, "limit": limit},
+        )
+        response.raise_for_status()
+        return tuple(WorkerStatus.model_validate(item) for item in response.json())
+
+    def status(self, worker_id: UUID) -> WorkerStatus:
+        response = self._client._client.get(
+            f"/v1/workers/{worker_id}/status",
+            headers=self._client._headers(),
+        )
+        response.raise_for_status()
+        return WorkerStatus.model_validate(response.json())
+
+    def revoke(self, worker_id: UUID, *, expected_revision: int) -> WorkerIdentity:
+        result = self._client.command(
+            ApplicationCommand(
+                command_type="worker.revoke",
+                actor_id=self._client.principal_id,
+                target_type="worker",
+                target_id=str(worker_id),
+                expected_revision=expected_revision,
+                payload={},
+            )
+        )
+        return WorkerIdentity.model_validate(result.payload)
+
+    def place(self, request: RemotePlacementRequest) -> RemotePlacement:
+        result = self._client.command(
+            ApplicationCommand(
+                command_type="worker.task.place",
+                actor_id=self._client.principal_id,
+                target_type="worker_task_placement",
+                target_id=str(request.id),
+                payload={"request": request.model_dump(mode="json")},
+            )
+        )
+        return RemotePlacement.model_validate(result.payload)
+
+    def accept_completion(
+        self,
+        completion_id: UUID,
+        result: InitializationResult,
+        review: ReviewDecision,
+    ) -> WorkerCompletion:
+        accepted = self._client.command(
+            ApplicationCommand(
+                command_type="worker.completion.accept",
+                actor_id=self._client.principal_id,
+                target_type="worker_completion",
+                target_id=str(completion_id),
+                payload={
+                    "result": result.model_dump(mode="json"),
+                    "review": review.model_dump(mode="json"),
+                },
+            )
+        )
+        return WorkerCompletion.model_validate(accepted.payload)
+
+
 class ScheduleClient:
     """Thin schedule client; mishkand remains the sole timing and state authority."""
 
@@ -2011,6 +2147,7 @@ class StructureClient:
         return self._client.knowledge.corpora(project_id=project_id)
 
 
-def daemon_url(host: str, port: int) -> str:
+def daemon_url(host: str, port: int, *, secure: bool = False) -> str:
     formatted = f"[{host}]" if ":" in host else host
-    return f"http://{formatted}:{port}"
+    scheme = "https" if secure else "http"
+    return f"{scheme}://{formatted}:{port}"

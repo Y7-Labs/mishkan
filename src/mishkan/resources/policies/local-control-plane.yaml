@@ -142,6 +142,11 @@ rules:
         - schedule.remove
         - schedule.run_now
         - schedule.trigger
+        - worker.enrollment.create
+        - worker.enrollment.revoke
+        - worker.revoke
+        - worker.task.place
+        - worker.completion.accept
         - artifact.upload.open
         - artifact.upload.chunk
         - artifact.upload.commit
@@ -234,6 +239,10 @@ rules:
         - application.run.control
         - application.schedule.manage
         - application.schedule.trigger
+        - application.worker.enrollment
+        - application.worker.identity
+        - application.worker.placement
+        - application.worker.acceptance
         - application.artifact.upload
         - application.artifact.reference
         - application.artifact.collection

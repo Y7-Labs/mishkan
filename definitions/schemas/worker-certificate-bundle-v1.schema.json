@@ -1,0 +1,65 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "certificate_authority_pem": {
+      "title": "Certificate Authority Pem",
+      "type": "string"
+    },
+    "certificate_pem": {
+      "title": "Certificate Pem",
+      "type": "string"
+    },
+    "certificate_serial": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Certificate Serial",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "fingerprint_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Fingerprint Sha256",
+      "type": "string"
+    },
+    "id": {
+      "format": "uuid",
+      "title": "Id",
+      "type": "string"
+    },
+    "not_after": {
+      "format": "date-time",
+      "title": "Not After",
+      "type": "string"
+    },
+    "not_before": {
+      "format": "date-time",
+      "title": "Not Before",
+      "type": "string"
+    },
+    "schema_version": {
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "worker_id": {
+      "format": "uuid",
+      "title": "Worker Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "worker_id",
+    "certificate_pem",
+    "certificate_authority_pem",
+    "certificate_serial",
+    "fingerprint_sha256",
+    "not_before",
+    "not_after"
+  ],
+  "title": "WorkerCertificateBundle",
+  "type": "object"
+}

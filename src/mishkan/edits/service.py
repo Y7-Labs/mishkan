@@ -36,6 +36,7 @@ from mishkan.edits.models import (
     PreconditionKind,
 )
 from mishkan.persistence.migration import SchemaManager
+from mishkan.persistence.runtime import DatabaseTarget
 from mishkan.persistence.sqlite import ChangeOperationRow, ChangeSetRow, create_local_engine
 from mishkan.repository.tokens import content_base_revision_token
 
@@ -47,7 +48,7 @@ class ChangeSetContentInspector(Protocol):
 class ChangeSetService:
     def __init__(
         self,
-        database: Path,
+        database: DatabaseTarget,
         workspace: Path,
         artifacts: DurableArtifactService,
         *,

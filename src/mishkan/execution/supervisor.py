@@ -41,6 +41,7 @@ from mishkan.execution.sessions import (
     SessionState,
 )
 from mishkan.persistence.migration import SchemaManager
+from mishkan.persistence.runtime import DatabaseTarget
 from mishkan.persistence.sqlite import ExecutionSessionRow, create_local_engine
 from mishkan.tools.effects import (
     WorkspaceEffectEvidence,
@@ -83,7 +84,7 @@ class SessionContentInspector(Protocol):
 class SessionSupervisor:
     def __init__(
         self,
-        database: Path,
+        database: DatabaseTarget,
         workspace: Path,
         spool_root: Path,
         config: SessionConfig,

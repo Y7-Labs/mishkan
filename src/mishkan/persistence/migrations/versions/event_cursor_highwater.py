@@ -40,7 +40,12 @@ def _create(*, monotone: bool) -> None:
         sa.Column("task_id", sa.String(256), nullable=True),
         sa.Column("identity_id", sa.String(256), nullable=True),
         sa.Column("team_id", sa.String(256), nullable=True),
-        sa.Column("security_relevant", sa.Boolean(), nullable=False, server_default="0"),
+        sa.Column(
+            "security_relevant",
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.false(),
+        ),
         sa.Column("event_type", sa.String(120), nullable=False),
         sa.Column("source", sa.String(128), nullable=False),
         sa.Column("payload", sa.Text(), nullable=False),
@@ -79,6 +84,7 @@ def _copy(source: str) -> None:
 
 
 def upgrade() -> None:
+    dialect = op.get_bind().dialect.name
     with op.batch_alter_table("runs") as batch:
         batch.alter_column(
             "updated_at", existing_type=sa.String(40), existing_nullable=True, nullable=False
@@ -92,15 +98,23 @@ def upgrade() -> None:
     _create(monotone=True)
     _copy("event_outbox_reusable")
     op.execute("DROP TABLE event_outbox_reusable")
-    op.execute("DELETE FROM sqlite_sequence WHERE name = 'event_outbox'")
-    op.execute(
-        "INSERT INTO sqlite_sequence(name, seq) "
-        "SELECT 'event_outbox', MAX(cursor) FROM ("
-        "SELECT COALESCE(MAX(cursor), 0) AS cursor FROM event_outbox "
-        "UNION ALL "
-        "SELECT COALESCE(MAX(event_cursor), 0) AS cursor FROM application_commands"
-        ")"
-    )
+    if dialect == "sqlite":
+        op.execute("DELETE FROM sqlite_sequence WHERE name = 'event_outbox'")
+        op.execute(
+            "INSERT INTO sqlite_sequence(name, seq) "
+            "SELECT 'event_outbox', MAX(cursor) FROM ("
+            "SELECT COALESCE(MAX(cursor), 0) AS cursor FROM event_outbox "
+            "UNION ALL "
+            "SELECT COALESCE(MAX(event_cursor), 0) AS cursor FROM application_commands"
+            ")"
+        )
+    elif dialect == "postgresql":
+        op.execute(
+            "SELECT setval(pg_get_serial_sequence('event_outbox', 'cursor'), "
+            "GREATEST("
+            "COALESCE((SELECT MAX(cursor) FROM event_outbox), 0), "
+            "COALESCE((SELECT MAX(event_cursor) FROM application_commands), 0), 1), true)"
+        )
 
 
 def downgrade() -> None:

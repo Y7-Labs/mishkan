@@ -46,6 +46,7 @@ from mishkan.config.models import BrowserConfig, BrowserProfileConfig, BrowserPr
 from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.domain.time import utc_now
 from mishkan.persistence.migration import SchemaManager
+from mishkan.persistence.runtime import DatabaseTarget
 from mishkan.persistence.sqlite import (
     BrowserActionRow,
     BrowserObservationRow,
@@ -58,7 +59,7 @@ from mishkan.tools.inspection import ContentInspector
 class BrowserSupervisor:
     def __init__(
         self,
-        database: Path,
+        database: DatabaseTarget,
         workspace: Path,
         config: BrowserConfig,
         artifacts: DurableArtifactService,

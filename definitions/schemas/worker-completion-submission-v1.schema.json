@@ -1,0 +1,109 @@
+{
+  "$defs": {
+    "EffectReportState": {
+      "enum": [
+        "not_applicable",
+        "proven",
+        "uncertain"
+      ],
+      "title": "EffectReportState",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "artifact_ids": {
+      "default": [],
+      "items": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "title": "Artifact Ids",
+      "type": "array"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "effect_evidence_artifact_ids": {
+      "default": [],
+      "items": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "title": "Effect Evidence Artifact Ids",
+      "type": "array"
+    },
+    "effect_report": {
+      "$ref": "#/$defs/EffectReportState"
+    },
+    "envelope_id": {
+      "format": "uuid",
+      "title": "Envelope Id",
+      "type": "string"
+    },
+    "execution_context_revision": {
+      "maxLength": 128,
+      "minLength": 7,
+      "title": "Execution Context Revision",
+      "type": "string"
+    },
+    "id": {
+      "format": "uuid",
+      "title": "Id",
+      "type": "string"
+    },
+    "lease_id": {
+      "format": "uuid",
+      "title": "Lease Id",
+      "type": "string"
+    },
+    "repository_revision": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 7,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Repository Revision"
+    },
+    "result": {
+      "additionalProperties": true,
+      "title": "Result",
+      "type": "object"
+    },
+    "schema_version": {
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "unified_patch_artifact_id": {
+      "anyOf": [
+        {
+          "format": "uuid",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Unified Patch Artifact Id"
+    }
+  },
+  "required": [
+    "envelope_id",
+    "lease_id",
+    "execution_context_revision",
+    "result",
+    "effect_report"
+  ],
+  "title": "WorkerCompletionSubmission",
+  "type": "object"
+}

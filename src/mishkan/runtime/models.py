@@ -27,6 +27,7 @@ class RunState(StrEnum):
 class TaskState(StrEnum):
     PENDING = "pending"
     ELIGIBLE = "eligible"
+    LEASED = "leased"
     EXECUTING = "executing"
     VALIDATING = "validating"
     ACCEPTED = "accepted"

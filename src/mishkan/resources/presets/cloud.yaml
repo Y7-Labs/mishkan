@@ -1,4 +1,4 @@
-schema_version: "1.7"
+schema_version: "1.8"
 mode: cloud
 engineering_profile: package://mishkan.resources.environment/default.yaml
 engineering_pack_sources:
@@ -78,10 +78,12 @@ daemon:
   request_timeout_seconds: 120
   max_request_bytes: 8388608
 persistence:
+  kind: sqlite
   database: .mishkan/mishkan.db
   busy_timeout_ms: 5000
   event_retention_days: 30
 artifacts:
+  kind: filesystem
   root: .mishkan/artifacts
   max_artifact_bytes: 536870912
   chunk_bytes: 1048576

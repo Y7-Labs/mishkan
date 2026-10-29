@@ -8,6 +8,12 @@
           "title": "Chunk Bytes",
           "type": "integer"
         },
+        "kind": {
+          "const": "filesystem",
+          "default": "filesystem",
+          "title": "Kind",
+          "type": "string"
+        },
         "max_artifact_bytes": {
           "minimum": 1,
           "title": "Max Artifact Bytes",
@@ -411,6 +417,106 @@
         "request_timeout_seconds"
       ],
       "title": "DaemonConfig",
+      "type": "object"
+    },
+    "DistributedConfig": {
+      "additionalProperties": false,
+      "description": "Public coordination and worker bounds for distributed mode.",
+      "properties": {
+        "certificate_rotation_before_seconds": {
+          "default": 3600,
+          "maximum": 2592000,
+          "minimum": 60,
+          "title": "Certificate Rotation Before Seconds",
+          "type": "integer"
+        },
+        "certificate_ttl_seconds": {
+          "default": 86400,
+          "maximum": 31536000,
+          "minimum": 300,
+          "title": "Certificate Ttl Seconds",
+          "type": "integer"
+        },
+        "claim_page_limit": {
+          "default": 10,
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Claim Page Limit",
+          "type": "integer"
+        },
+        "enrollment_ttl_seconds": {
+          "default": 600,
+          "maximum": 3600,
+          "minimum": 30,
+          "title": "Enrollment Ttl Seconds",
+          "type": "integer"
+        },
+        "heartbeat_interval_seconds": {
+          "default": 10,
+          "maximum": 300,
+          "minimum": 1,
+          "title": "Heartbeat Interval Seconds",
+          "type": "integer"
+        },
+        "heartbeat_timeout_seconds": {
+          "default": 30,
+          "maximum": 3600,
+          "minimum": 2,
+          "title": "Heartbeat Timeout Seconds",
+          "type": "integer"
+        },
+        "lease_seconds": {
+          "default": 60,
+          "maximum": 86400,
+          "minimum": 5,
+          "title": "Lease Seconds",
+          "type": "integer"
+        },
+        "max_completion_bytes": {
+          "default": 67108864,
+          "maximum": 1073741824,
+          "minimum": 1,
+          "title": "Max Completion Bytes",
+          "type": "integer"
+        },
+        "max_envelope_bytes": {
+          "default": 8388608,
+          "maximum": 1073741824,
+          "minimum": 1,
+          "title": "Max Envelope Bytes",
+          "type": "integer"
+        },
+        "max_worker_concurrency": {
+          "default": 8,
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Max Worker Concurrency",
+          "type": "integer"
+        },
+        "server_ca_certificate_ref": {
+          "$ref": "#/$defs/CredentialReference"
+        },
+        "server_certificate_ref": {
+          "$ref": "#/$defs/CredentialReference"
+        },
+        "server_private_key_ref": {
+          "$ref": "#/$defs/CredentialReference"
+        },
+        "worker_ca_certificate_ref": {
+          "$ref": "#/$defs/CredentialReference"
+        },
+        "worker_ca_private_key_ref": {
+          "$ref": "#/$defs/CredentialReference"
+        }
+      },
+      "required": [
+        "server_ca_certificate_ref",
+        "server_certificate_ref",
+        "server_private_key_ref",
+        "worker_ca_certificate_ref",
+        "worker_ca_private_key_ref"
+      ],
+      "title": "DistributedConfig",
       "type": "object"
     },
     "KnowledgeClass": {
@@ -1333,6 +1439,12 @@
           "minimum": 1,
           "title": "Event Retention Days",
           "type": "integer"
+        },
+        "kind": {
+          "const": "sqlite",
+          "default": "sqlite",
+          "title": "Kind",
+          "type": "string"
         }
       },
       "required": [
@@ -1341,6 +1453,60 @@
         "event_retention_days"
       ],
       "title": "PersistenceConfig",
+      "type": "object"
+    },
+    "PostgreSQLPersistenceConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "connect_timeout_seconds": {
+          "default": 10,
+          "maximum": 300,
+          "minimum": 1,
+          "title": "Connect Timeout Seconds",
+          "type": "integer"
+        },
+        "dsn_ref": {
+          "$ref": "#/$defs/CredentialReference"
+        },
+        "event_retention_days": {
+          "maximum": 36500,
+          "minimum": 1,
+          "title": "Event Retention Days",
+          "type": "integer"
+        },
+        "kind": {
+          "const": "postgresql",
+          "title": "Kind",
+          "type": "string"
+        },
+        "max_overflow": {
+          "default": 20,
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Max Overflow",
+          "type": "integer"
+        },
+        "pool_size": {
+          "default": 10,
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Pool Size",
+          "type": "integer"
+        },
+        "statement_timeout_ms": {
+          "default": 120000,
+          "maximum": 3600000,
+          "minimum": 1,
+          "title": "Statement Timeout Ms",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "dsn_ref",
+        "event_retention_days"
+      ],
+      "title": "PostgreSQLPersistenceConfig",
       "type": "object"
     },
     "ProjectConfig": {
@@ -1400,6 +1566,159 @@
         "endpoint"
       ],
       "title": "ProviderConfig",
+      "type": "object"
+    },
+    "S3ArtifactConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "access_key_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CredentialReference"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "addressing_style": {
+          "default": "path",
+          "enum": [
+            "path",
+            "virtual"
+          ],
+          "title": "Addressing Style",
+          "type": "string"
+        },
+        "bucket": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Bucket",
+          "type": "string"
+        },
+        "ca_bundle": {
+          "anyOf": [
+            {
+              "format": "path",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ca Bundle"
+        },
+        "chunk_bytes": {
+          "minimum": 1,
+          "title": "Chunk Bytes",
+          "type": "integer"
+        },
+        "endpoint": {
+          "anyOf": [
+            {
+              "format": "uri",
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint"
+        },
+        "kind": {
+          "const": "s3",
+          "title": "Kind",
+          "type": "string"
+        },
+        "max_artifact_bytes": {
+          "minimum": 1,
+          "title": "Max Artifact Bytes",
+          "type": "integer"
+        },
+        "multipart_chunk_bytes": {
+          "maximum": 5368709120,
+          "minimum": 5242880,
+          "title": "Multipart Chunk Bytes",
+          "type": "integer"
+        },
+        "multipart_threshold_bytes": {
+          "minimum": 1,
+          "title": "Multipart Threshold Bytes",
+          "type": "integer"
+        },
+        "prefix": {
+          "default": "",
+          "maxLength": 1024,
+          "title": "Prefix",
+          "type": "string"
+        },
+        "region": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Region"
+        },
+        "secret_key_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CredentialReference"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "session_token_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CredentialReference"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "staging_root": {
+          "format": "path",
+          "title": "Staging Root",
+          "type": "string"
+        },
+        "staging_ttl_seconds": {
+          "minimum": 1,
+          "title": "Staging Ttl Seconds",
+          "type": "integer"
+        },
+        "tls_verify": {
+          "default": true,
+          "title": "Tls Verify",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "bucket",
+        "staging_root",
+        "max_artifact_bytes",
+        "chunk_bytes",
+        "staging_ttl_seconds",
+        "multipart_threshold_bytes",
+        "multipart_chunk_bytes"
+      ],
+      "title": "S3ArtifactConfig",
       "type": "object"
     },
     "SchedulingConfig": {
@@ -2422,13 +2741,28 @@
     "artifacts": {
       "anyOf": [
         {
-          "$ref": "#/$defs/ArtifactConfig"
+          "discriminator": {
+            "mapping": {
+              "filesystem": "#/$defs/ArtifactConfig",
+              "s3": "#/$defs/S3ArtifactConfig"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ArtifactConfig"
+            },
+            {
+              "$ref": "#/$defs/S3ArtifactConfig"
+            }
+          ]
         },
         {
           "type": "null"
         }
       ],
-      "default": null
+      "default": null,
+      "title": "Artifacts"
     },
     "browser": {
       "anyOf": [
@@ -2463,6 +2797,17 @@
       "anyOf": [
         {
           "$ref": "#/$defs/DaemonConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "distributed": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DistributedConfig"
         },
         {
           "type": "null"
@@ -2574,13 +2919,28 @@
     "persistence": {
       "anyOf": [
         {
-          "$ref": "#/$defs/PersistenceConfig"
+          "discriminator": {
+            "mapping": {
+              "postgresql": "#/$defs/PostgreSQLPersistenceConfig",
+              "sqlite": "#/$defs/PersistenceConfig"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/PersistenceConfig"
+            },
+            {
+              "$ref": "#/$defs/PostgreSQLPersistenceConfig"
+            }
+          ]
         },
         {
           "type": "null"
         }
       ],
-      "default": null
+      "default": null,
+      "title": "Persistence"
     },
     "policy_sources": {
       "items": {

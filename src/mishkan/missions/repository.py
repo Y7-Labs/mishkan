@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 from typing import TypeVar
 
 from pydantic import BaseModel
@@ -34,6 +33,7 @@ from mishkan.missions.models import (
 )
 from mishkan.organization.models import OrganizationRosterDefinition
 from mishkan.persistence.migration import SchemaManager
+from mishkan.persistence.runtime import DatabaseTarget
 from mishkan.persistence.sqlite import (
     AcceptanceRow,
     MissionAssignmentRow,
@@ -102,7 +102,7 @@ _MISSION_TRANSITIONS: dict[MissionState, frozenset[MissionState]] = {
 class SQLiteMissionRepository:
     """Persist immutable revisions and update only the mission's current projection."""
 
-    def __init__(self, database_path: Path, *, busy_timeout_ms: int = 5_000) -> None:
+    def __init__(self, database_path: DatabaseTarget, *, busy_timeout_ms: int = 5_000) -> None:
         SchemaManager(database_path).require_current()
         self._engine = create_local_engine(database_path, busy_timeout_ms=busy_timeout_ms)
 

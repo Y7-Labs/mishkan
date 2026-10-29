@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from mishkan.artifacts.bodies import ArtifactBodyStore, FilesystemArtifactBodyStore
 from mishkan.artifacts.models import (
     ArtifactAvailability,
     ArtifactCollection,
@@ -40,6 +41,7 @@ from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.domain.identity import new_id
 from mishkan.domain.time import utc_now
 from mishkan.persistence.migration import SchemaManager
+from mishkan.persistence.runtime import DatabaseTarget
 from mishkan.persistence.sqlite import (
     ArtifactCollectionRow,
     ArtifactGCPlanRow,
@@ -74,7 +76,7 @@ class DurableArtifactService:
 
     def __init__(
         self,
-        database: Path,
+        database: DatabaseTarget,
         root: Path,
         *,
         max_artifact_bytes: int,
@@ -82,19 +84,20 @@ class DurableArtifactService:
         busy_timeout_ms: int = 5_000,
         staging_ttl_seconds: int | None = None,
         content_inspector: ArtifactContentInspector | None = None,
+        body_store: ArtifactBodyStore | None = None,
     ) -> None:
         SchemaManager(database).require_current()
         self._root = root.resolve()
         self._blobs = self._root / "blobs"
         self._staging = self._root / "staging"
         self._legacy_manifests = self._root / "manifests"
+        self._body_store = body_store or FilesystemArtifactBodyStore(self._blobs)
         self._max_artifact_bytes = max_artifact_bytes
         self._max_chunk_bytes = max_chunk_bytes
         self._staging_ttl_seconds = staging_ttl_seconds
         self._content_inspector = content_inspector
         self._cas_locks = tuple(threading.RLock() for _ in range(64))
-        for directory in (self._blobs, self._staging):
-            directory.mkdir(parents=True, exist_ok=True)
+        self._staging.mkdir(parents=True, exist_ok=True)
         self._engine = create_local_engine(database, busy_timeout_ms=busy_timeout_ms)
 
     @property
@@ -273,20 +276,34 @@ class DurableArtifactService:
             staging_path = row.staging_path
         expected_digest = f"sha256:{content_digest}"
         storage_ref = f"sha256/{content_digest[:2]}/{content_digest[2:]}"
-        destination = self._safe_blob(storage_ref)
-        destination.parent.mkdir(parents=True, exist_ok=True)
         try:
             if os.path.lexists(staged):
-                self._commit_staged_blob(
+                before = os.stat(staged, follow_symlinks=False)
+                if not stat.S_ISREG(before.st_mode):
+                    raise MishkanError(
+                        ErrorCode.ARTIFACT, "artifact staging body is not a regular file"
+                    )
+                if self._content_inspector is not None:
+                    self._content_inspector.require_safe_file(staged, resolved_secrets)
+                self._body_store.publish(
                     staged,
-                    destination,
-                    content_digest,
-                    size,
-                    self._content_inspector,
-                    resolved_secrets,
+                    storage_ref,
+                    expected_digest=expected_digest,
+                    expected_size=size,
                 )
+                after = os.stat(staged, follow_symlinks=False)
+                if (
+                    after.st_dev != before.st_dev
+                    or after.st_ino != before.st_ino
+                    or after.st_size != before.st_size
+                ):
+                    raise MishkanError(
+                        ErrorCode.ARTIFACT,
+                        "artifact staging body changed during commit",
+                    )
+                staged.unlink()
             else:
-                self._require_existing_committed_blob(destination, content_digest, size)
+                self._require_existing_committed_blob(storage_ref, expected_digest, size)
         except MishkanError as exc:
             if exc.envelope.code is ErrorCode.SECRET_CONTENT:
                 self._reject_secret_upload(upload_id, staged)
@@ -353,24 +370,21 @@ class DurableArtifactService:
 
     def _require_existing_committed_blob(
         self,
-        destination: Path,
+        storage_ref: str,
         digest: str,
         size: int,
     ) -> None:
-        try:
-            observed_digest, observed_size = self._hash_file(destination)
-        except OSError as exc:
+        observed = self._body_store.observe(storage_ref)
+        if observed is None:
             raise MishkanError(
                 ErrorCode.ARTIFACT,
                 "artifact staging body and committed CAS body are unavailable",
-            ) from exc
-        if observed_digest != digest or observed_size != size:
+            )
+        if observed.digest != digest or observed.size_bytes != size:
             raise MishkanError(
                 ErrorCode.ARTIFACT,
                 "artifact CAS recovery body failed size or digest verification",
             )
-        if self._content_inspector is not None:
-            self._content_inspector.require_safe_file(destination)
 
     def _reject_secret_upload(self, upload_id: UUID, staged: Path) -> None:
         with Session(self._engine) as session, session.begin():
@@ -429,32 +443,14 @@ class DurableArtifactService:
                 "artifact body is not available",
                 details={"lifecycle": manifest.lifecycle.value},
             )
-        blob = self._safe_blob(manifest.storage_ref)
-        try:
-            descriptor = os.open(blob, os.O_RDONLY | os.O_NOFOLLOW)
-        except OSError as exc:
+        observed = self._body_store.observe(manifest.storage_ref)
+        if observed is None:
             self._set_lifecycle(manifest.id, ArtifactLifecycle.MISSING)
-            raise MishkanError(ErrorCode.ARTIFACT, "artifact body is missing") from exc
-        try:
-            observed = os.fstat(descriptor)
-            if not stat.S_ISREG(observed.st_mode):
-                self._set_lifecycle(manifest.id, ArtifactLifecycle.CORRUPT)
-                raise MishkanError(ErrorCode.ARTIFACT, "artifact body is not a regular file")
-            digest = hashlib.sha256()
-            size = 0
-            while chunk := os.read(descriptor, self._max_chunk_bytes):
-                digest.update(chunk)
-                size += len(chunk)
-            if size != manifest.size_bytes or f"sha256:{digest.hexdigest()}" != manifest.digest:
-                self._set_lifecycle(manifest.id, ArtifactLifecycle.CORRUPT)
-                raise MishkanError(
-                    ErrorCode.ARTIFACT, "artifact body failed integrity verification"
-                )
-            os.lseek(descriptor, 0, os.SEEK_SET)
-            while chunk := os.read(descriptor, chunk_size):
-                yield chunk
-        finally:
-            os.close(descriptor)
+            raise MishkanError(ErrorCode.ARTIFACT, "artifact body is missing")
+        if observed.size_bytes != manifest.size_bytes or observed.digest != manifest.digest:
+            self._set_lifecycle(manifest.id, ArtifactLifecycle.CORRUPT)
+            raise MishkanError(ErrorCode.ARTIFACT, "artifact body failed integrity verification")
+        yield from self._body_store.iter_bytes(manifest.storage_ref, chunk_size=chunk_size)
 
     def upload(self, upload_id: UUID) -> UploadSession:
         with Session(self._engine) as session:
@@ -480,16 +476,20 @@ class DurableArtifactService:
                 "artifact body is not available",
                 details={"lifecycle": manifest.lifecycle.value},
             )
-        blob = self._safe_blob(manifest.storage_ref)
-        try:
-            digest, size = self._hash_file(blob)
-        except OSError as exc:
+        observed = self._body_store.observe(manifest.storage_ref)
+        if observed is None:
             self._set_lifecycle(manifest.id, ArtifactLifecycle.MISSING)
-            raise MishkanError(ErrorCode.ARTIFACT, "artifact body is missing") from exc
-        if size != manifest.size_bytes or f"sha256:{digest}" != manifest.digest:
+            raise MishkanError(ErrorCode.ARTIFACT, "artifact body is missing")
+        if observed.size_bytes != manifest.size_bytes or observed.digest != manifest.digest:
             self._set_lifecycle(manifest.id, ArtifactLifecycle.CORRUPT)
             raise MishkanError(ErrorCode.ARTIFACT, "artifact body failed integrity verification")
-        return blob
+        local = self._body_store.local_path(manifest.storage_ref)
+        if local is None:
+            raise MishkanError(
+                ErrorCode.ARTIFACT,
+                "artifact body backend does not expose a local path; use streamed reads",
+            )
+        return local
 
     def create_collection(self, entries: dict[str, str]) -> ArtifactCollection:
         normalized: dict[str, str] = {}
@@ -799,7 +799,7 @@ class DurableArtifactService:
                         )
                     )
                 if live is None:
-                    self._safe_blob(storage_ref).unlink(missing_ok=True)
+                    self._body_store.delete(storage_ref)
                     with Session(self._engine) as session, session.begin():
                         rows = session.scalars(
                             select(ArtifactRow).where(
@@ -855,10 +855,8 @@ class DurableArtifactService:
             ]
             unavailable_ids: set[str] = set()
             for row in rows:
-                blob = self._safe_blob(row.storage_ref)
-                try:
-                    digest, size = self._hash_file(blob)
-                except OSError:
+                observed = self._body_store.observe(row.storage_ref)
+                if observed is None:
                     unavailable_ids.add(row.id)
                     issues.append(
                         ArtifactReconciliationIssue(
@@ -868,7 +866,7 @@ class DurableArtifactService:
                         )
                     )
                     continue
-                if size != row.size_bytes or f"sha256:{digest}" != row.digest:
+                if observed.size_bytes != row.size_bytes or observed.digest != row.digest:
                     unavailable_ids.add(row.id)
                     issues.append(
                         ArtifactReconciliationIssue(
@@ -877,10 +875,7 @@ class DurableArtifactService:
                             storage_ref=row.storage_ref,
                         )
                     )
-            for blob in sorted(self._blobs.glob("sha256/[0-9a-f][0-9a-f]/*")):
-                if blob.is_symlink() or not blob.is_file():
-                    continue
-                storage_ref = blob.relative_to(self._blobs).as_posix()
+            for storage_ref in self._body_store.list_refs():
                 if storage_ref not in live_storage:
                     issues.append(
                         ArtifactReconciliationIssue(
@@ -957,7 +952,7 @@ class DurableArtifactService:
                             )
                         )
                     if live is None:
-                        self._safe_blob(issue.storage_ref).unlink(missing_ok=True)
+                        self._body_store.delete(issue.storage_ref)
 
         expired_staging: list[Path] = []
         with Session(self._engine) as session, session.begin():
@@ -1037,22 +1032,20 @@ class DurableArtifactService:
                     raise MishkanError(
                         ErrorCode.REVISION_MISMATCH, "artifact changed after planning"
                     )
-                blob = self._safe_blob(issue.storage_ref)
+                observed = self._body_store.observe(issue.storage_ref)
                 if issue.action is ArtifactReconciliationAction.MARK_MISSING:
-                    if blob.exists():
+                    if observed is not None:
                         raise MishkanError(
                             ErrorCode.REVISION_MISMATCH,
                             "missing artifact reappeared after planning",
                         )
                 else:
-                    try:
-                        digest, size = self._hash_file(blob)
-                    except OSError as exc:
+                    if observed is None:
                         raise MishkanError(
                             ErrorCode.REVISION_MISMATCH,
                             "corrupt artifact became missing after planning",
-                        ) from exc
-                    if size == row.size_bytes and f"sha256:{digest}" == row.digest:
+                        )
+                    if observed.size_bytes == row.size_bytes and observed.digest == row.digest:
                         raise MishkanError(
                             ErrorCode.REVISION_MISMATCH,
                             "corrupt artifact was repaired after planning",
@@ -1149,14 +1142,12 @@ class DurableArtifactService:
                 manifest = ArtifactManifest.model_validate_json(path.read_text(encoding="utf-8"))
             except (OSError, ValidationError):
                 continue
-            blob = self._safe_blob(manifest.storage_ref)
+            observed = self._body_store.observe(manifest.storage_ref)
             lifecycle = manifest.lifecycle
-            if not blob.is_file():
+            if observed is None:
                 lifecycle = ArtifactLifecycle.MISSING
-            else:
-                digest, size = self._hash_file(blob)
-                if size != manifest.size_bytes or f"sha256:{digest}" != manifest.digest:
-                    lifecycle = ArtifactLifecycle.CORRUPT
+            elif observed.size_bytes != manifest.size_bytes or observed.digest != manifest.digest:
+                lifecycle = ArtifactLifecycle.CORRUPT
             imported_manifest = manifest.model_copy(update={"lifecycle": lifecycle})
             with Session(self._engine) as session, session.begin():
                 if session.get(ArtifactRow, str(manifest.id)) is not None:
@@ -1225,12 +1216,6 @@ class DurableArtifactService:
             raise MishkanError(ErrorCode.ARTIFACT, "artifact staging path escaped its root")
         return self._staging / expected_name
 
-    def _safe_blob(self, storage_ref: str) -> Path:
-        path = (self._blobs / storage_ref).resolve()
-        if not path.is_relative_to(self._blobs):
-            raise MishkanError(ErrorCode.ARTIFACT, "artifact storage path escaped its root")
-        return path
-
     @staticmethod
     def _require_upload(session: Session, upload_id: UUID) -> ArtifactUploadRow:
         row = session.get(ArtifactUploadRow, str(upload_id))
@@ -1255,121 +1240,6 @@ class DurableArtifactService:
     def _cas_lock(self, storage_ref: str) -> threading.RLock:
         digest = hashlib.sha256(storage_ref.encode()).digest()
         return self._cas_locks[int.from_bytes(digest[:2], "big") % len(self._cas_locks)]
-
-    @staticmethod
-    def _commit_staged_blob(
-        staged: Path,
-        destination: Path,
-        digest: str,
-        size: int,
-        inspector: ArtifactContentInspector | None,
-        resolved_secrets: tuple[str, ...],
-    ) -> None:
-        try:
-            source_descriptor = os.open(staged, os.O_RDONLY | os.O_NOFOLLOW)
-        except OSError as exc:
-            raise MishkanError(
-                ErrorCode.ARTIFACT,
-                "artifact staging body could not be opened without following links",
-            ) from exc
-        source_stat = os.fstat(source_descriptor)
-        if not stat.S_ISREG(source_stat.st_mode):
-            os.close(source_descriptor)
-            raise MishkanError(ErrorCode.ARTIFACT, "artifact staging body is not a regular file")
-        temporary = destination.parent / f".{destination.name}.{new_id()}.tmp"
-        try:
-            target_descriptor = os.open(
-                temporary,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                0o600,
-            )
-        except Exception:
-            os.close(source_descriptor)
-            raise
-        observed_digest = hashlib.sha256()
-        observed_size = 0
-        try:
-            while chunk := os.read(source_descriptor, 1024 * 1024):
-                observed_size += len(chunk)
-                observed_digest.update(chunk)
-                view = memoryview(chunk)
-                while view:
-                    written = os.write(target_descriptor, view)
-                    if written < 1:
-                        raise OSError("short artifact CAS write")
-                    view = view[written:]
-            os.fsync(target_descriptor)
-        except Exception:
-            temporary.unlink(missing_ok=True)
-            raise
-        finally:
-            os.close(target_descriptor)
-            os.close(source_descriptor)
-        observed_digest_value = observed_digest.hexdigest()
-        if observed_digest_value != digest or observed_size != size:
-            temporary.unlink(missing_ok=True)
-            raise MishkanError(
-                ErrorCode.ARTIFACT,
-                "artifact upload failed size or digest verification",
-                details={
-                    "expected_size": size,
-                    "observed_size": observed_size,
-                    "expected_digest": f"sha256:{digest}",
-                    "observed_digest": f"sha256:{observed_digest_value}",
-                },
-            )
-        try:
-            if inspector is not None:
-                inspector.require_safe_file(temporary, resolved_secrets)
-            try:
-                os.link(temporary, destination, follow_symlinks=False)
-            except FileExistsError:
-                try:
-                    existing_digest, existing_size = DurableArtifactService._hash_file(destination)
-                except OSError as exc:
-                    raise MishkanError(
-                        ErrorCode.ARTIFACT,
-                        "artifact CAS destination is not a readable regular file",
-                    ) from exc
-                if existing_digest != digest or existing_size != size:
-                    raise MishkanError(
-                        ErrorCode.ARTIFACT, "artifact CAS collision was detected"
-                    ) from None
-            descriptor = os.open(destination.parent, os.O_RDONLY)
-            try:
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
-            try:
-                current = os.stat(staged, follow_symlinks=False)
-            except FileNotFoundError as exc:
-                raise MishkanError(
-                    ErrorCode.ARTIFACT,
-                    "artifact staging body changed during commit",
-                ) from exc
-            if (
-                current.st_dev != source_stat.st_dev
-                or current.st_ino != source_stat.st_ino
-                or not stat.S_ISREG(current.st_mode)
-            ):
-                raise MishkanError(
-                    ErrorCode.ARTIFACT,
-                    "artifact staging body changed during commit",
-                )
-            staged.unlink()
-        finally:
-            temporary.unlink(missing_ok=True)
-
-    @staticmethod
-    def _hash_file(path: Path) -> tuple[str, int]:
-        digest = hashlib.sha256()
-        size = 0
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-        with os.fdopen(descriptor, "rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                size += len(chunk)
-                digest.update(chunk)
-        return digest.hexdigest(), size
 
     @staticmethod
     def _digest(content: bytes) -> str:

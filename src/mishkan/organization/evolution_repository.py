@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -22,6 +21,7 @@ from mishkan.organization.evolution import (
 )
 from mishkan.organization.models import OrganizationRosterDefinition
 from mishkan.persistence.migration import SchemaManager
+from mishkan.persistence.runtime import DatabaseTarget
 from mishkan.persistence.sqlite import (
     OrganizationRosterRow,
     OutboxRow,
@@ -32,7 +32,7 @@ from mishkan.persistence.sqlite import (
 
 
 class SQLiteProfessionalEvolutionRepository:
-    def __init__(self, database_path: Path, *, busy_timeout_ms: int = 5_000) -> None:
+    def __init__(self, database_path: DatabaseTarget, *, busy_timeout_ms: int = 5_000) -> None:
         SchemaManager(database_path).require_current()
         self._engine = create_local_engine(database_path, busy_timeout_ms=busy_timeout_ms)
 

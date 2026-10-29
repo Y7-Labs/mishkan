@@ -116,3 +116,50 @@ jobs:
           tests/acceptance/skills_engineering/test_governed_docker_compose.py
           tests/acceptance/skills_engineering/test_governed_devcontainer.py
           tests/acceptance/skills_engineering/test_governed_podman.py
+
+  i09-distributed:
+    name: I09 PostgreSQL S3 and two-worker recovery / Linux
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+          cache-suffix: i09-distributed
+
+      - name: Install Python and locked project
+        run: |
+          uv python install 3.11
+          uv sync --locked --dev --python 3.11
+
+      - name: Start pinned PostgreSQL and S3-compatible services
+        run: >-
+          docker compose
+          -f tests/acceptance/distributed_execution/docker-compose.yaml
+          up --detach --wait
+
+      - name: Prove two-worker loss recovery and exactly-once acceptance
+        env:
+          MISHKAN_I09_POSTGRES_DSN: postgresql+psycopg://mishkan:mishkan-i09-test-only@127.0.0.1:55439/mishkan
+          MISHKAN_I09_S3_ENDPOINT: http://127.0.0.1:59090
+        run: >-
+          uv run --python 3.11 pytest -vv
+          tests/acceptance/distributed_execution/test_two_worker_recovery.py
+
+      - name: Capture distributed service logs
+        if: failure()
+        run: >-
+          docker compose
+          -f tests/acceptance/distributed_execution/docker-compose.yaml
+          logs --no-color
+
+      - name: Stop distributed services
+        if: always()
+        run: >-
+          docker compose
+          -f tests/acceptance/distributed_execution/docker-compose.yaml
+          down --volumes --remove-orphans

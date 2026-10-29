@@ -74,3 +74,13 @@ def test_model_router_refuses_missing_routes_and_unsupported_providers() -> None
     with pytest.raises(MishkanError) as unknown:
         next(CrewAIModelRouter(changed).candidates_for("planning"))
     assert unknown.value.envelope.details == {"kind": "unsupported-provider"}
+
+
+def test_model_router_applies_a_stricter_task_timeout() -> None:
+    config = ConfigLoader().load([Path("tests/fixtures/config/local-valid.yaml")]).value
+
+    llm = next(CrewAIModelRouter(config).candidates_for("planning", timeout_seconds=11))
+
+    assert llm.timeout == 11
+    with pytest.raises(MishkanError):
+        next(CrewAIModelRouter(config).candidates_for("planning", timeout_seconds=0))

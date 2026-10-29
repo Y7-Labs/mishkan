@@ -63,7 +63,7 @@ def migrate_to_1_2(source: Path) -> Path:
 
 
 def migrate_to_latest(source: Path) -> Path:
-    """Atomically migrate one explicit 1.1-1.6 source to schema 1.7."""
+    """Atomically migrate one explicit 1.1-1.7 source to schema 1.8."""
     target = source.expanduser().resolve()
     try:
         document: Any = yaml.safe_load(target.read_text(encoding="utf-8"))
@@ -80,10 +80,11 @@ def migrate_to_latest(source: Path) -> Path:
         "1.4",
         "1.5",
         "1.6",
+        "1.7",
     }:
         raise MishkanError(
             ErrorCode.VERSION,
-            "configuration migration requires one schema 1.1 through 1.5 source",
+            "configuration migration requires one schema 1.1 through 1.7 source",
             details={"source": str(target), "automatic_migration": False},
         )
     mode = document.get("mode")
@@ -94,7 +95,7 @@ def migrate_to_latest(source: Path) -> Path:
             details={"mode": mode},
         )
     defaults = yaml.safe_load(preset_text(str(mode)))
-    document["schema_version"] = "1.7"
+    document["schema_version"] = "1.8"
     for field in (
         "daemon",
         "persistence",
@@ -109,6 +110,12 @@ def migrate_to_latest(source: Path) -> Path:
         "scheduling",
     ):
         document.setdefault(field, defaults[field])
+    persistence = document.get("persistence")
+    if isinstance(persistence, dict):
+        persistence.setdefault("kind", "sqlite")
+    artifacts = document.get("artifacts")
+    if isinstance(artifacts, dict):
+        artifacts.setdefault("kind", "filesystem")
     payload = yaml.safe_dump(document, sort_keys=False, allow_unicode=True).encode()
     descriptor, staged_name = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
     staged = Path(staged_name)
