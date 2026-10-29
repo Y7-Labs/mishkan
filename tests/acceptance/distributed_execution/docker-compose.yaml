@@ -1,0 +1,28 @@
+name: mishkan-i09-gate
+
+services:
+  postgres:
+    image: postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+    environment:
+      POSTGRES_USER: mishkan
+      POSTGRES_PASSWORD: mishkan-i09-test-only
+      POSTGRES_DB: mishkan
+    ports:
+      - "127.0.0.1:55439:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -q -U mishkan -d mishkan"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  s3:
+    image: adobe/s3mock:5.2.3@sha256:ab01a6946750f451ca215a47e91030695b260e4003b8a5a6201d25029b8fca92
+    environment:
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: mishkan-evidence
+    ports:
+      - "127.0.0.1:59090:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9090/ || exit 1"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
