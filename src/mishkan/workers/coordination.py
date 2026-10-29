@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from uuid import UUID
 
@@ -883,11 +885,13 @@ class WorkerCoordinationRepository:
         completion_id: UUID,
         result: InitializationResult,
         review: ReviewDecision,
+        *,
+        session: Session | None = None,
     ) -> WorkerCompletion:
         """Atomically accept one delivered result and release its dependencies."""
 
         now = utc_now()
-        with Session(self._engine) as session, session.begin():
+        with self._acceptance_session(session) as session:
             completion = session.scalar(
                 select(WorkerCompletionRow)
                 .where(WorkerCompletionRow.id == str(completion_id))
@@ -1043,6 +1047,14 @@ class WorkerCoordinationRepository:
                 )
             session.flush()
             return self._completion(completion)
+
+    @contextmanager
+    def _acceptance_session(self, active: Session | None) -> Iterator[Session]:
+        if active is not None:
+            yield active
+            return
+        with Session(self._engine) as owned, owned.begin():
+            yield owned
 
     def expire_leases(self, *, now: datetime | None = None) -> tuple[UUID, ...]:
         observed_now = require_aware(now) if now is not None else utc_now()

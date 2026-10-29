@@ -1203,6 +1203,29 @@ def create_app(
                         "task_id": placement.task_id,
                         **_authorization_projection(authorized),
                     }
+                if command.command_type == "worker.completion.accept":
+                    if (
+                        worker_coordination is None
+                        or authorized.worker_completion_result is None
+                        or authorized.worker_completion_review is None
+                    ):
+                        raise MishkanError(
+                            ErrorCode.OUTPUT_CONTRACT,
+                            "authorized worker completion acceptance is absent",
+                        )
+                    completion = worker_coordination.accept_completion(
+                        worker_target_id,
+                        authorized.worker_completion_result,
+                        authorized.worker_completion_review,
+                        session=session,
+                    )
+                    payload = completion.model_dump(mode="json")
+                    return payload, {
+                        "completion_id": str(completion.id),
+                        "envelope_id": str(completion.envelope_id),
+                        "state": completion.state.value,
+                        **_authorization_projection(authorized),
+                    }
                 raise MishkanError(ErrorCode.OUTPUT_CONTRACT, "unknown worker command")
 
             event_types = {
@@ -1210,6 +1233,7 @@ def create_app(
                 "worker.enrollment.revoke": "worker.enrollment_token_revoked",
                 "worker.revoke": "worker.revoked",
                 "worker.task.place": "worker.task_placement_accepted",
+                "worker.completion.accept": "worker.completion_acceptance_recorded",
             }
             async with command_lock:
                 try:
@@ -1218,7 +1242,7 @@ def create_app(
                         target_id=command.target_id,
                         event_type=event_types[command.command_type],
                         mutation=apply_worker_mutation,
-                        source="mishkand.worker_identity",
+                        source="mishkand.worker_coordination",
                     )
                 except MishkanError as error:
                     return repository.refuse(

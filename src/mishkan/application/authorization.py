@@ -86,6 +86,7 @@ from mishkan.organization import (
     ProfessionalPromotionDisposition,
     ProfessionalPromotionRequest,
 )
+from mishkan.planning.models import InitializationResult, ReviewDecision
 from mishkan.policy import (
     AuthorizationDecision,
     AuthorizationRequest,
@@ -181,6 +182,11 @@ COMMAND_SEMANTICS = MappingProxyType(
         ),
         "worker.task.place": CommandSemantics(
             "application.worker.placement", "coordination", ("worker.task.place",)
+        ),
+        "worker.completion.accept": CommandSemantics(
+            "application.worker.acceptance",
+            "coordination",
+            ("worker.completion.accept",),
         ),
         "artifact.upload.open": CommandSemantics(
             "application.artifact.upload", "artifact", ("artifact.stage",)
@@ -469,6 +475,7 @@ _COMMAND_TARGETS = MappingProxyType(
         "worker.enrollment.revoke": ("worker_enrollment", "uuid"),
         "worker.revoke": ("worker", "uuid"),
         "worker.task.place": ("worker_task_placement", "uuid"),
+        "worker.completion.accept": ("worker_completion", "uuid"),
         "artifact.upload.open": ("artifact_service", "absent"),
         "artifact.upload.chunk": ("artifact_upload", "uuid"),
         "artifact.upload.commit": ("artifact_upload", "uuid"),
@@ -586,6 +593,10 @@ _COMMAND_PAYLOAD_FIELDS = MappingProxyType(
         "worker.enrollment.revoke": (frozenset(), frozenset()),
         "worker.revoke": (frozenset(), frozenset()),
         "worker.task.place": (frozenset({"request"}), frozenset()),
+        "worker.completion.accept": (
+            frozenset({"result", "review"}),
+            frozenset(),
+        ),
         "artifact.upload.open": (
             frozenset({"expected_size", "expected_digest", "media_type", "provenance"}),
             frozenset({"sensitivity", "retention"}),
@@ -767,6 +778,8 @@ class AuthorizedApplicationCommand:
     schedule_create: ScheduleCreateRequest | None = None
     schedule_fire: ScheduleFireRequest | None = None
     worker_placement: RemotePlacementRequest | None = None
+    worker_completion_result: InitializationResult | None = None
+    worker_completion_review: ReviewDecision | None = None
 
 
 class ApplicationCommandAuthority:
@@ -867,6 +880,8 @@ class ApplicationCommandAuthority:
         schedule_create: ScheduleCreateRequest | None = None
         schedule_fire: ScheduleFireRequest | None = None
         worker_placement: RemotePlacementRequest | None = None
+        worker_completion_result: InitializationResult | None = None
+        worker_completion_review: ReviewDecision | None = None
 
         try:
             if normalized.command_type == "run.initialize":
@@ -942,6 +957,19 @@ class ApplicationCommandAuthority:
                         if worker_placement.preferred_worker_id is not None
                         else ()
                     ),
+                )
+            elif normalized.command_type == "worker.completion.accept":
+                worker_completion_result = InitializationResult.model_validate(
+                    normalized.payload["result"]
+                )
+                worker_completion_review = ReviewDecision.model_validate(
+                    normalized.payload["review"]
+                )
+                if worker_completion_result.task_id != worker_completion_review.task_id:
+                    raise ValueError("worker completion result and review identify different tasks")
+                external_resources = (
+                    f"worker-completion:{normalized.target_id}",
+                    f"task:{worker_completion_result.task_id}",
                 )
             elif normalized.command_type == "run.repository.establish":
                 repository_establishment_request = RepositoryEstablishmentRequest.model_validate(
@@ -2136,6 +2164,8 @@ class ApplicationCommandAuthority:
             schedule_create=schedule_create,
             schedule_fire=schedule_fire,
             worker_placement=worker_placement,
+            worker_completion_result=worker_completion_result,
+            worker_completion_review=worker_completion_review,
         )
 
     @staticmethod

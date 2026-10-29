@@ -128,6 +128,7 @@ from mishkan.organization import (
     ProfessionalPromotionDisposition,
     ProfessionalPromotionRequest,
 )
+from mishkan.planning.models import InitializationResult, ReviewDecision
 from mishkan.scheduling import (
     OccurrenceSource,
     ScheduleCreateRequest,
@@ -155,6 +156,7 @@ from mishkan.workers.models import (
     EnrollmentCredential,
     RemotePlacement,
     RemotePlacementRequest,
+    WorkerCompletion,
     WorkerIdentity,
     WorkerStatus,
 )
@@ -1813,6 +1815,26 @@ class WorkerAdminClient:
             )
         )
         return RemotePlacement.model_validate(result.payload)
+
+    def accept_completion(
+        self,
+        completion_id: UUID,
+        result: InitializationResult,
+        review: ReviewDecision,
+    ) -> WorkerCompletion:
+        accepted = self._client.command(
+            ApplicationCommand(
+                command_type="worker.completion.accept",
+                actor_id=self._client.principal_id,
+                target_type="worker_completion",
+                target_id=str(completion_id),
+                payload={
+                    "result": result.model_dump(mode="json"),
+                    "review": review.model_dump(mode="json"),
+                },
+            )
+        )
+        return WorkerCompletion.model_validate(accepted.payload)
 
 
 class ScheduleClient:

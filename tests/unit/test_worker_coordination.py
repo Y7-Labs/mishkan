@@ -9,11 +9,12 @@ import pytest
 from pydantic import SecretStr
 from sqlalchemy.orm import Session
 
+from mishkan.application import ApplicationCommand
 from mishkan.artifacts import ArtifactProvenance
 from mishkan.artifacts.service import DurableArtifactService
 from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.domain.time import utc_now
-from mishkan.persistence import LocalRunRepository, SchemaManager
+from mishkan.persistence import LocalRunRepository, SchemaManager, SQLiteApplicationRepository
 from mishkan.persistence.sqlite import (
     RemoteTaskEnvelopeRow,
     TaskRow,
@@ -483,6 +484,64 @@ def test_lease_delivery_and_acceptance_are_atomic_and_at_most_once(tmp_path: Pat
     duplicate_submission = submission.model_copy(update={"id": uuid4()})
     duplicate = service.complete(worker_id, duplicate_submission, grant.lease_token)
     assert duplicate.state is WorkerCompletionState.DUPLICATE
+    assert runs.task_states(str(run_id)) == {"remote-task": TaskState.ACCEPTED.value}
+
+
+def test_application_command_atomically_accepts_remote_completion(tmp_path: Path) -> None:
+    database, runs, coordination, service, run_id, task_row_id, worker_id = _setup(tmp_path)
+    grant = service.issue(_envelope(run_id, task_row_id, worker_id))
+    result = _result()
+    delivered = service.complete(
+        worker_id,
+        WorkerCompletionSubmission(
+            envelope_id=grant.envelope.id,
+            lease_id=grant.lease.id,
+            execution_context_revision="b" * 40,
+            repository_revision="b" * 40,
+            result=result.model_dump(mode="json"),
+            effect_report=EffectReportState.NOT_APPLICABLE,
+        ),
+        grant.lease_token,
+    )
+    command = ApplicationCommand(
+        command_type="worker.completion.accept",
+        actor_id="CTO",
+        target_type="worker_completion",
+        target_id=str(delivered.id),
+        payload={
+            "result": result.model_dump(mode="json"),
+            "review": _review().model_dump(mode="json"),
+        },
+    )
+    application = SQLiteApplicationRepository(database)
+
+    def mutate(session: Session, _revision: int):  # type: ignore[no-untyped-def]
+        accepted = coordination.accept_completion(
+            delivered.id,
+            result,
+            _review(),
+            session=session,
+        )
+        payload = accepted.model_dump(mode="json")
+        return payload, {"completion_id": str(accepted.id), "state": accepted.state.value}
+
+    settled = application.accept_with_mutation(
+        command,
+        target_id=str(delivered.id),
+        event_type="worker.completion_acceptance_recorded",
+        mutation=mutate,
+    )
+    replay = application.accept_with_mutation(
+        command,
+        target_id=str(delivered.id),
+        event_type="worker.completion_acceptance_recorded",
+        mutation=lambda _session, _revision: (_ for _ in ()).throw(
+            AssertionError("idempotent command replay must not repeat acceptance")
+        ),
+    )
+
+    assert settled == replay
+    assert coordination.completion(delivered.id).state is WorkerCompletionState.ACCEPTED
     assert runs.task_states(str(run_id)) == {"remote-task": TaskState.ACCEPTED.value}
 
 

@@ -25,6 +25,7 @@ from mishkan.daemon.bootstrap import DaemonPaths
 from mishkan.daemon.composition import build_artifact_body_store, build_database_runtime
 from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.domain.time import utc_now
+from mishkan.planning.models import InitializationResult, ReviewDecision
 from mishkan.policy import Decision
 from mishkan.workers import (
     CapabilityRequirement,
@@ -275,4 +276,52 @@ def test_worker_placement_command_derives_exact_contextual_scope(tmp_path: Path)
     assert authorized.request.external_resources == (
         f"run:{placement.run_id}",
         f"task:{placement.run_id}:remote-task",
+    )
+
+
+def test_worker_completion_acceptance_has_typed_public_authority(tmp_path: Path) -> None:
+    document = _distributed_document()
+    document["project"]["workspace"] = str(tmp_path)  # type: ignore[index]
+    config = MishkanConfig.model_validate(document)
+    authority = ApplicationCommandAuthority(
+        config,
+        tmp_path,
+        _UnusedLookup(),
+        _UnusedLookup(),
+    )
+    completion_id = uuid4()
+    result = InitializationResult(
+        repository_revision="a" * 40,
+        task_id="remote-task",
+        summary="Validated remote result.",
+        cited_paths=("README.md",),
+        findings=("The result is grounded in the cited path.",),
+    )
+    review = ReviewDecision(
+        task_id="remote-task",
+        verdict="accepted",
+        summary="Independent review accepted the result.",
+        checked_citations=("README.md",),
+    )
+
+    authorized = authority.authorize(
+        ApplicationCommand(
+            command_type="worker.completion.accept",
+            actor_id="CTO",
+            target_type="worker_completion",
+            target_id=str(completion_id),
+            payload={
+                "result": result.model_dump(mode="json"),
+                "review": review.model_dump(mode="json"),
+            },
+        )
+    )
+
+    assert authorized.decision.decision is Decision.ALLOW
+    assert authorized.request.capability == "application.worker.acceptance"
+    assert authorized.worker_completion_result == result
+    assert authorized.worker_completion_review == review
+    assert authorized.request.external_resources == (
+        f"worker-completion:{completion_id}",
+        "task:remote-task",
     )

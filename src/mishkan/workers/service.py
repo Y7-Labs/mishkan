@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from mishkan.domain.identity import new_id
 from mishkan.domain.time import utc_now
+from mishkan.planning.models import InitializationResult, ReviewDecision
 from mishkan.workers.coordination import WorkerCoordinationRepository, lease_token_digest
 from mishkan.workers.models import (
     CapabilityRequirement,
@@ -243,6 +244,21 @@ class WorkerCoordinationService:
             worker_id,
             submission,
             token_digest=lease_token_digest(lease_token.get_secret_value()),
+        )
+
+    def accept_completion(
+        self,
+        completion_id: UUID,
+        result: InitializationResult,
+        review: ReviewDecision,
+        *,
+        session: Session | None = None,
+    ) -> WorkerCompletion:
+        return self._repository.accept_completion(
+            completion_id,
+            result,
+            review,
+            session=session,
         )
 
     def reconcile(self, envelope_id: UUID, *, effect_report: EffectReportState) -> None:

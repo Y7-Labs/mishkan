@@ -12,6 +12,7 @@ import pytest
 from mishkan.client import Mishkan
 from mishkan.daemon.auth import TokenFile
 from mishkan.events import EventEnvelope, EventPage
+from mishkan.planning.models import InitializationResult, ReviewDecision
 from mishkan.scheduling import DateTriggerSpec, ScheduleCreateRequest, ScheduleMissionRequest
 
 
@@ -293,6 +294,80 @@ def test_worker_sdk_exposes_bounded_availability_status(tmp_path: Path) -> None:
     assert listed == (observed,)
     assert observed.identity.id == worker_id
     assert observed.availability.value == "never_seen"
+
+
+def test_worker_sdk_submits_governed_completion_acceptance(tmp_path: Path) -> None:
+    token_file = tmp_path / "token.json"
+    TokenFile(token_file).create("CTO")
+    completion_id = uuid4()
+    envelope_id = uuid4()
+    lease_id = uuid4()
+    worker_id = uuid4()
+    result = InitializationResult(
+        repository_revision="a" * 40,
+        task_id="remote-task",
+        summary="Validated remote result.",
+        cited_paths=("README.md",),
+        findings=("The result is grounded in the cited path.",),
+    )
+    review = ReviewDecision(
+        task_id="remote-task",
+        verdict="accepted",
+        summary="Independent review accepted the result.",
+        checked_citations=("README.md",),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        command = json.loads(request.content)
+        assert command["command_type"] == "worker.completion.accept"
+        assert command["target_id"] == str(completion_id)
+        assert command["payload"] == {
+            "result": result.model_dump(mode="json"),
+            "review": review.model_dump(mode="json"),
+        }
+        now = datetime.now(UTC).isoformat()
+        completion = {
+            "id": str(completion_id),
+            "created_at": now,
+            "envelope_id": str(envelope_id),
+            "lease_id": str(lease_id),
+            "worker_id": str(worker_id),
+            "fingerprint": "f" * 64,
+            "state": "accepted",
+            "result": result.model_dump(mode="json"),
+            "artifact_ids": [],
+            "unified_patch_artifact_id": None,
+            "effect_evidence_artifact_ids": [],
+            "effect_report": "not_applicable",
+            "received_at": now,
+            "accepted_at": now,
+        }
+        return httpx.Response(
+            200,
+            json={
+                "schema_version": "1.0",
+                "command_id": command["command_id"],
+                "status": "accepted",
+                "target_type": "worker_completion",
+                "target_id": str(completion_id),
+                "revision": 1,
+                "event_cursor": 1,
+                "payload": completion,
+                "error": None,
+                "completed_at": now,
+            },
+        )
+
+    with Mishkan("http://mishkand.test", token_file=token_file) as client:
+        client._client.close()
+        client._client = httpx.Client(
+            base_url="http://mishkand.test",
+            transport=httpx.MockTransport(handler),
+        )
+        accepted = client.workers.accept_completion(completion_id, result, review)
+
+    assert accepted.id == completion_id
+    assert accepted.state.value == "accepted"
 
 
 def test_sdk_bounded_query_surfaces_use_authenticated_versioned_routes(tmp_path: Path) -> None:
