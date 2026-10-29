@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from datetime import datetime
 from enum import StrEnum
 from pathlib import PurePosixPath
@@ -77,6 +78,12 @@ class EffectReportState(StrEnum):
     NOT_APPLICABLE = "not_applicable"
     PROVEN = "proven"
     UNCERTAIN = "uncertain"
+
+
+class WorkerArtifactKind(StrEnum):
+    OUTPUT = "output"
+    UNIFIED_PATCH = "unified_patch"
+    EFFECT_EVIDENCE = "effect_evidence"
 
 
 class WorkerValueModel(BaseModel):
@@ -161,6 +168,7 @@ class WorkerRuntimeProfile(WorkerValueModel):
     context_bindings: tuple[WorkerContextBinding, ...] = ()
     max_concurrency: int = Field(default=1, ge=1, le=10_000)
     max_input_bytes: int = Field(default=16_777_216, ge=1, le=1_073_741_824)
+    artifact_chunk_bytes: int = Field(default=1_048_576, ge=1, le=67_108_864)
     heartbeat_interval_seconds: float = Field(default=10, gt=0, le=300)
     renewal_interval_seconds: float = Field(default=20, gt=0, le=3_600)
     idle_poll_seconds: float = Field(default=2, gt=0, le=300)
@@ -416,6 +424,32 @@ class WorkerCompletionSubmission(DomainRecord):
         return canonical_fingerprint(self.model_dump(mode="json", exclude={"id", "created_at"}))
 
 
+class WorkerGeneratedArtifact(WorkerValueModel):
+    """Lease-local bytes awaiting upload; the coordinator assigns the artifact identity."""
+
+    name: str = Field(pattern=r"^[a-z][a-z0-9_.-]{1,127}$")
+    kind: WorkerArtifactKind = WorkerArtifactKind.OUTPUT
+    media_type: str = Field(min_length=1, max_length=256)
+    content_base64: str = Field(min_length=1, max_length=1_431_655_768)
+    sensitivity: str = Field(default="internal", min_length=1, max_length=64)
+    retention: str = Field(default="run", min_length=1, max_length=64)
+
+    @field_validator("content_base64")
+    @classmethod
+    def content_is_canonical_base64(cls, value: str) -> str:
+        try:
+            decoded = base64.b64decode(value, validate=True)
+        except ValueError as exc:
+            raise ValueError("generated worker artifact content is not base64") from exc
+        if not decoded or base64.b64encode(decoded).decode("ascii") != value:
+            raise ValueError("generated worker artifact content is empty or non-canonical")
+        return value
+
+    @property
+    def content(self) -> bytes:
+        return base64.b64decode(self.content_base64, validate=True)
+
+
 class WorkerExecutionResult(WorkerValueModel):
     """Executor-produced material; mishkand still validates and accepts it separately."""
 
@@ -424,6 +458,7 @@ class WorkerExecutionResult(WorkerValueModel):
     unified_patch_artifact_id: UUID | None = None
     effect_evidence_artifact_ids: tuple[UUID, ...] = ()
     effect_report: EffectReportState = EffectReportState.NOT_APPLICABLE
+    generated_artifacts: tuple[WorkerGeneratedArtifact, ...] = ()
 
     @model_validator(mode="after")
     def execution_artifacts_are_unique(self) -> Self:
@@ -434,6 +469,14 @@ class WorkerExecutionResult(WorkerValueModel):
         )
         if len(references) != len(set(references)):
             raise ValueError("worker execution artifact references must be unique")
+        names = [item.name for item in self.generated_artifacts]
+        if len(names) != len(set(names)):
+            raise ValueError("generated worker artifact names must be unique")
+        if (
+            sum(item.kind is WorkerArtifactKind.UNIFIED_PATCH for item in self.generated_artifacts)
+            > 1
+        ):
+            raise ValueError("worker execution may generate only one unified patch")
         return self
 
 

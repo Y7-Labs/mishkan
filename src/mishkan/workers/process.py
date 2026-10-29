@@ -10,16 +10,20 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+from uuid import UUID
 
 import psutil  # type: ignore[import-untyped]
 from pydantic import SecretStr
 
+from mishkan.artifacts import ArtifactProvenance
 from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.domain.time import utc_now
 from mishkan.workers.client import WorkerHttpClient
 from mishkan.workers.coordination import lease_token_digest
 from mishkan.workers.models import (
     ImmutableTaskEnvelope,
+    WorkerArtifactKind,
+    WorkerArtifactUploadRequest,
     WorkerClaimRequest,
     WorkerCompletionSubmission,
     WorkerExecutionResult,
@@ -45,6 +49,8 @@ class PendingWorkerDelivery:
     request: WorkerClaimRequest
     lease_token: SecretStr
     claim: WorkerTaskClaim | None = None
+    execution: WorkerExecutionResult | None = None
+    uploaded_artifacts: tuple[tuple[str, UUID], ...] = ()
     submission: WorkerCompletionSubmission | None = None
 
 
@@ -81,6 +87,14 @@ class WorkerRuntimeJournal:
             "claim": (
                 delivery.claim.model_dump(mode="json") if delivery.claim is not None else None
             ),
+            "execution": (
+                delivery.execution.model_dump(mode="json")
+                if delivery.execution is not None
+                else None
+            ),
+            "uploaded_artifacts": [
+                [name, str(artifact_id)] for name, artifact_id in delivery.uploaded_artifacts
+            ],
             "submission": (
                 delivery.submission.model_dump(mode="json")
                 if delivery.submission is not None
@@ -104,6 +118,15 @@ class WorkerRuntimeJournal:
                     WorkerTaskClaim.model_validate(payload["claim"])
                     if payload.get("claim") is not None
                     else None
+                ),
+                execution=(
+                    WorkerExecutionResult.model_validate(payload["execution"])
+                    if payload.get("execution") is not None
+                    else None
+                ),
+                uploaded_artifacts=tuple(
+                    (str(item[0]), UUID(str(item[1])))
+                    for item in payload.get("uploaded_artifacts", ())
                 ),
                 submission=(
                     WorkerCompletionSubmission.model_validate(payload["submission"])
@@ -152,7 +175,11 @@ class WorkerProcess:
             if claim is None:
                 self._journal.clear()
                 return False
-            pending = PendingWorkerDelivery(pending.request, pending.lease_token, claim)
+            pending = PendingWorkerDelivery(
+                request=pending.request,
+                lease_token=pending.lease_token,
+                claim=claim,
+            )
             self._journal.save(pending)
         claim = pending.claim
         assert claim is not None
@@ -173,7 +200,18 @@ class WorkerProcess:
         inputs = self._materialize_inputs(claim.envelope)
         keeper = _LeaseKeeper(self, claim, active_lease, pending.lease_token)
         with keeper:
-            execution = self._executor.execute(claim.envelope, inputs)
+            execution = pending.execution
+            if execution is None:
+                execution = self._executor.execute(claim.envelope, inputs)
+                pending = PendingWorkerDelivery(
+                    request=pending.request,
+                    lease_token=pending.lease_token,
+                    claim=claim,
+                    execution=execution,
+                )
+                self._journal.save(pending)
+            self._validate_execution_size(claim.envelope, execution)
+            pending = self._upload_generated_artifacts(pending, execution)
         if keeper.failure is not None:
             raise MishkanError(
                 ErrorCode.WORKER,
@@ -181,22 +219,25 @@ class WorkerProcess:
                 details={"failure_type": type(keeper.failure).__name__},
                 retryable=True,
             )
+        artifact_ids, patch_id, effect_ids = self._artifact_references(pending, execution)
         submission = WorkerCompletionSubmission(
             envelope_id=claim.envelope.id,
             lease_id=claim.lease.id,
             execution_context_revision=claim.envelope.execution_context_revision,
             repository_revision=claim.envelope.repository_revision,
             result=execution.result,
-            artifact_ids=execution.artifact_ids,
-            unified_patch_artifact_id=execution.unified_patch_artifact_id,
-            effect_evidence_artifact_ids=execution.effect_evidence_artifact_ids,
+            artifact_ids=artifact_ids,
+            unified_patch_artifact_id=patch_id,
+            effect_evidence_artifact_ids=effect_ids,
             effect_report=execution.effect_report,
         )
         pending = PendingWorkerDelivery(
-            pending.request,
-            pending.lease_token,
-            claim,
-            submission,
+            request=pending.request,
+            lease_token=pending.lease_token,
+            claim=claim,
+            execution=execution,
+            uploaded_artifacts=pending.uploaded_artifacts,
+            submission=submission,
         )
         self._journal.save(pending)
         self._client.complete(submission, pending.lease_token)
@@ -238,6 +279,92 @@ class WorkerProcess:
             materialized[reference.name] = content
             remaining -= len(content)
         return materialized
+
+    def _upload_generated_artifacts(
+        self,
+        pending: PendingWorkerDelivery,
+        execution: WorkerExecutionResult,
+    ) -> PendingWorkerDelivery:
+        claim = pending.claim
+        assert claim is not None
+        uploaded = dict(pending.uploaded_artifacts)
+        for generated in execution.generated_artifacts:
+            if generated.name in uploaded:
+                continue
+            content = generated.content
+            request = WorkerArtifactUploadRequest(
+                expected_size=len(content),
+                expected_digest=f"sha256:{hashlib.sha256(content).hexdigest()}",
+                media_type=generated.media_type,
+                provenance=ArtifactProvenance(
+                    producer_identity=f"worker:{self._identity.worker_id}",
+                    run_id=str(claim.envelope.run_id),
+                    task_attempt_id=str(claim.envelope.id),
+                    call_id=generated.name,
+                    capability="crewai.task.execute",
+                    channel=f"worker-{generated.kind.value}",
+                ),
+                sensitivity=generated.sensitivity,
+                retention=generated.retention,
+            )
+            manifest = self._client.upload_artifact(
+                claim.lease.id,
+                pending.lease_token,
+                content,
+                request,
+                chunk_bytes=self._profile.artifact_chunk_bytes,
+            )
+            uploaded[generated.name] = manifest.id
+            pending = PendingWorkerDelivery(
+                request=pending.request,
+                lease_token=pending.lease_token,
+                claim=claim,
+                execution=execution,
+                uploaded_artifacts=tuple(sorted(uploaded.items())),
+            )
+            self._journal.save(pending)
+        return pending
+
+    @staticmethod
+    def _validate_execution_size(
+        envelope: ImmutableTaskEnvelope,
+        execution: WorkerExecutionResult,
+    ) -> None:
+        result_bytes = len(
+            json.dumps(execution.result, sort_keys=True, separators=(",", ":")).encode()
+        )
+        generated_bytes = sum(len(item.content) for item in execution.generated_artifacts)
+        if result_bytes + generated_bytes > envelope.resources.max_result_bytes:
+            raise MishkanError(
+                ErrorCode.OUTPUT_CONTRACT,
+                "worker result and generated artifacts exceed the immutable envelope bound",
+            )
+
+    @staticmethod
+    def _artifact_references(
+        pending: PendingWorkerDelivery,
+        execution: WorkerExecutionResult,
+    ) -> tuple[tuple[UUID, ...], UUID | None, tuple[UUID, ...]]:
+        uploaded = dict(pending.uploaded_artifacts)
+        output_ids = list(execution.artifact_ids)
+        effect_ids = list(execution.effect_evidence_artifact_ids)
+        patch_id = execution.unified_patch_artifact_id
+        for generated in execution.generated_artifacts:
+            artifact_id = uploaded.get(generated.name)
+            if artifact_id is None:
+                raise MishkanError(ErrorCode.ARTIFACT, "generated worker artifact is not uploaded")
+            if generated.kind is WorkerArtifactKind.OUTPUT:
+                output_ids.append(artifact_id)
+            elif generated.kind is WorkerArtifactKind.EFFECT_EVIDENCE:
+                effect_ids.append(artifact_id)
+            elif patch_id is not None:
+                raise MishkanError(
+                    ErrorCode.OUTPUT_CONTRACT,
+                    "worker execution produced more than one unified patch",
+                )
+            else:
+                patch_id = artifact_id
+        return tuple(output_ids), patch_id, tuple(effect_ids)
 
     def _heartbeat(self, active_lease_ids: tuple) -> None:  # type: ignore[type-arg]
         resources = WorkerResourceSnapshot(

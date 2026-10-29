@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import os
 from datetime import timedelta
 from pathlib import Path
@@ -15,9 +16,11 @@ from mishkan.workers import (
     ImmutableTaskEnvelope,
     TaskPathScope,
     TaskResourceLimits,
+    WorkerArtifactKind,
     WorkerClaimRequest,
     WorkerCompletionState,
     WorkerExecutionResult,
+    WorkerGeneratedArtifact,
     WorkerHeartbeat,
     WorkerHeartbeatRecord,
     WorkerLease,
@@ -122,6 +125,8 @@ class _Client:
         self.claim_requests: list[WorkerClaimRequest] = []
         self.heartbeats: list[WorkerHeartbeat] = []
         self.submissions = []
+        self.uploads = []
+        self.fail_uploads = 0
         self.fail_completions = 0
 
     def heartbeat(self, heartbeat):  # type: ignore[no-untyped-def]
@@ -175,6 +180,16 @@ class _Client:
             received_at=utc_now(),
         )
 
+    def upload_artifact(  # type: ignore[no-untyped-def]
+        self, lease_id, lease_token, content, request, *, chunk_bytes
+    ):
+        if self.fail_uploads:
+            self.fail_uploads -= 1
+            raise RuntimeError("artifact response lost")
+        artifact_id = uuid4()
+        self.uploads.append((lease_id, lease_token, content, request, chunk_bytes, artifact_id))
+        return type("Manifest", (), {"id": artifact_id})()
+
 
 WORKER_ID = uuid4()
 
@@ -225,6 +240,75 @@ def test_lost_completion_response_replays_same_submission_without_reexecution(
     assert executor.calls == 1
     assert client.submissions[1] == first_submission
     assert not pending.exists()
+
+
+def test_generated_outputs_are_uploaded_once_and_bound_to_completion(tmp_path: Path) -> None:
+    client = _Client(_claim(WORKER_ID))
+    executor = _Executor()
+    generated = WorkerExecutionResult(
+        result={"summary": "remote result"},
+        generated_artifacts=(
+            WorkerGeneratedArtifact(
+                name="report",
+                media_type="text/plain",
+                content_base64=base64.b64encode(b"durable report").decode("ascii"),
+            ),
+            WorkerGeneratedArtifact(
+                name="patch",
+                kind=WorkerArtifactKind.UNIFIED_PATCH,
+                media_type="text/x-diff",
+                content_base64=base64.b64encode(b"--- a/file\n+++ b/file\n").decode("ascii"),
+            ),
+        ),
+    )
+    executor.execute = lambda _envelope, _inputs: generated  # type: ignore[method-assign]
+    process = _process(tmp_path, client, executor)
+
+    assert process.run_once()
+
+    assert executor.calls == 0
+    assert [upload[2] for upload in client.uploads] == [
+        b"durable report",
+        b"--- a/file\n+++ b/file\n",
+    ]
+    submission = client.submissions[0]
+    assert submission.artifact_ids == (client.uploads[0][-1],)
+    assert submission.unified_patch_artifact_id == client.uploads[1][-1]
+    assert all(
+        upload[3].provenance.task_attempt_id == str(client.claim_template.envelope.id)
+        for upload in client.uploads
+    )
+
+
+def test_generated_execution_survives_artifact_delivery_retry(tmp_path: Path) -> None:
+    client = _Client(_claim(WORKER_ID))
+    client.fail_uploads = 1
+
+    class GeneratingExecutor(_Executor):
+        def execute(self, _envelope, _inputs):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            return WorkerExecutionResult(
+                result={"summary": "stable result"},
+                generated_artifacts=(
+                    WorkerGeneratedArtifact(
+                        name="report",
+                        media_type="text/plain",
+                        content_base64=base64.b64encode(b"stable bytes").decode("ascii"),
+                    ),
+                ),
+            )
+
+    executor = GeneratingExecutor()
+    process = _process(tmp_path, client, executor)
+
+    with pytest.raises(RuntimeError, match="artifact response lost"):
+        process.run_once()
+    assert executor.calls == 1
+    assert '"execution"' in (tmp_path / "state" / "pending-delivery.json").read_text()
+
+    assert process.run_once()
+    assert executor.calls == 1
+    assert client.submissions[0].artifact_ids == (client.uploads[0][-1],)
 
 
 def test_claim_request_and_secret_survive_ambiguous_claim_response(tmp_path: Path) -> None:

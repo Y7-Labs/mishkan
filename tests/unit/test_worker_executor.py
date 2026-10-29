@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 from datetime import timedelta
 from types import SimpleNamespace
 from uuid import uuid4
@@ -12,7 +14,7 @@ from mishkan.config.models import MishkanConfig
 from mishkan.config.presets import preset_text
 from mishkan.domain.errors import MishkanError
 from mishkan.domain.time import utc_now
-from mishkan.planning.models import PlanTask
+from mishkan.planning.models import InitializationResult, PlanTask
 from mishkan.workers import ImmutableTaskEnvelope, TaskPathScope, TaskResourceLimits
 from mishkan.workers.executor import CrewAIWorkerTaskExecutor
 
@@ -37,6 +39,8 @@ def _envelope(*, max_result_bytes: int = 4096) -> ImmutableTaskEnvelope:
         task_attempt=1,
         worker_id=uuid4(),
         execution_context_revision="a" * 40,
+        repository_id="e" * 64,
+        repository_revision="a" * 40,
         plan_fingerprint="b" * 64,
         task_contract=contract.model_dump(mode="json"),
         role_definition_fingerprint="c" * 64,
@@ -57,6 +61,17 @@ def _envelope(*, max_result_bytes: int = 4096) -> ImmutableTaskEnvelope:
     )
 
 
+def _crew_output() -> str:
+    result = InitializationResult(
+        repository_revision="a" * 40,
+        task_id="remote-task",
+        summary="Grounded remote result.",
+        cited_paths=("README.md",),
+        findings=("The accepted input supports this finding.",),
+    )
+    return json.dumps({"result": result.model_dump(mode="json")})
+
+
 def test_remote_executor_uses_one_crewai_crew_without_tools_or_delegation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -75,7 +90,7 @@ def test_remote_executor_uses_one_crewai_crew_without_tools_or_delegation(
             observed["crew"] = kwargs
 
         def kickoff(self):  # type: ignore[no-untyped-def]
-            return SimpleNamespace(pydantic=None, raw='{"result":{"summary":"grounded"}}')
+            return SimpleNamespace(pydantic=None, raw=_crew_output())
 
     monkeypatch.setattr(executor_module, "Agent", Agent)
     monkeypatch.setattr(executor_module, "Task", Task)
@@ -89,7 +104,12 @@ def test_remote_executor_uses_one_crewai_crew_without_tools_or_delegation(
 
     result = executor.execute(_envelope(), {})
 
-    assert result.result == {"summary": "grounded"}
+    assert result.result["task_id"] == "remote-task"
+    assert result.result["summary"] == "Grounded remote result."
+    assert len(result.generated_artifacts) == 1
+    assert (
+        json.loads(base64.b64decode(result.generated_artifacts[0].content_base64)) == result.result
+    )
     agent = observed["agent"]
     assert isinstance(agent, dict)
     assert agent["tools"] == []
@@ -109,7 +129,7 @@ def test_remote_executor_enforces_immutable_result_bound(
             pass
 
         def kickoff(self):  # type: ignore[no-untyped-def]
-            return SimpleNamespace(pydantic=None, raw='{"result":{"value":"too large"}}')
+            return SimpleNamespace(pydantic=None, raw=_crew_output())
 
     monkeypatch.setattr(executor_module, "Agent", lambda **_kwargs: object())
     monkeypatch.setattr(executor_module, "Task", lambda **_kwargs: object())
