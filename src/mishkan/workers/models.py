@@ -10,6 +10,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
+from mishkan.artifacts import ArtifactProvenance
 from mishkan.domain.identity import DomainRecord
 from mishkan.domain.time import require_aware
 from mishkan.policy.models import canonical_fingerprint, security_identifier
@@ -400,7 +401,11 @@ class WorkerCompletionSubmission(DomainRecord):
 
     @model_validator(mode="after")
     def artifact_references_are_unique(self) -> Self:
-        references = (*self.artifact_ids, *self.effect_evidence_artifact_ids)
+        references = (
+            *self.artifact_ids,
+            *self.effect_evidence_artifact_ids,
+            *((self.unified_patch_artifact_id,) if self.unified_patch_artifact_id else ()),
+        )
         if len(references) != len(set(references)):
             raise ValueError("completion artifact references must be unique")
         return self
@@ -421,10 +426,23 @@ class WorkerExecutionResult(WorkerValueModel):
 
     @model_validator(mode="after")
     def execution_artifacts_are_unique(self) -> Self:
-        references = (*self.artifact_ids, *self.effect_evidence_artifact_ids)
+        references = (
+            *self.artifact_ids,
+            *self.effect_evidence_artifact_ids,
+            *((self.unified_patch_artifact_id,) if self.unified_patch_artifact_id else ()),
+        )
         if len(references) != len(set(references)):
             raise ValueError("worker execution artifact references must be unique")
         return self
+
+
+class WorkerArtifactUploadRequest(WorkerValueModel):
+    expected_size: int = Field(ge=0)
+    expected_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    media_type: str = Field(min_length=1, max_length=256)
+    provenance: ArtifactProvenance
+    sensitivity: str = Field(default="internal", min_length=1, max_length=64)
+    retention: str = Field(default="run", min_length=1, max_length=64)
 
 
 class WorkerCompletion(DomainRecord):

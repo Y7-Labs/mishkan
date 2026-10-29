@@ -21,6 +21,7 @@ from mishkan.workers.models import (
     RemotePlacement,
     RemotePlacementRequest,
     TaskResourceLimits,
+    WorkerArtifactUploadRequest,
     WorkerCertificateBundle,
     WorkerClaimRequest,
     WorkerCompletion,
@@ -211,3 +212,45 @@ class WorkerCoordinationService:
 
     def authorize_input_artifact(self, worker_id: UUID, artifact_id: UUID) -> None:
         self._repository.authorize_input_artifact(worker_id, artifact_id)
+
+    def register_artifact_upload(
+        self,
+        worker_id: UUID,
+        lease_id: UUID,
+        upload_id: UUID,
+        request: WorkerArtifactUploadRequest,
+        lease_token: SecretStr,
+    ) -> None:
+        self._repository.register_artifact_upload(
+            worker_id,
+            lease_id,
+            upload_id,
+            request,
+            token_digest=lease_token_digest(lease_token.get_secret_value()),
+        )
+
+    def authorize_artifact_upload(
+        self,
+        worker_id: UUID,
+        upload_id: UUID,
+        lease_token: SecretStr,
+    ) -> UUID:
+        return self._repository.authorize_artifact_upload(
+            worker_id,
+            upload_id,
+            token_digest=lease_token_digest(lease_token.get_secret_value()),
+        )
+
+    def complete_artifact_upload(
+        self,
+        worker_id: UUID,
+        upload_id: UUID,
+        artifact_id: UUID,
+        lease_token: SecretStr,
+    ) -> None:
+        self._repository.complete_artifact_upload(
+            worker_id,
+            upload_id,
+            artifact_id,
+            token_digest=lease_token_digest(lease_token.get_secret_value()),
+        )

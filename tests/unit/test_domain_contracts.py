@@ -257,6 +257,7 @@ def test_public_contract_catalogue_exports_deterministically(tmp_path: Path) -> 
         "web-search-request-v1.schema.json",
         "web-search-response-v1.schema.json",
         "worker-certificate-bundle-v1.schema.json",
+        "worker-artifact-upload-request-v1.schema.json",
         "worker-certificate-rotation-request-v1.schema.json",
         "worker-claim-request-v1.schema.json",
         "worker-completion-submission-v1.schema.json",

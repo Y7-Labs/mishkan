@@ -10,9 +10,17 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
+from mishkan.artifacts import (
+    ArtifactLifecycle,
+    ArtifactManifest,
+    ArtifactProvenance,
+    ArtifactValidation,
+    UploadSession,
+)
 from mishkan.domain.errors import MishkanError
 from mishkan.domain.time import utc_now
 from mishkan.workers import (
+    WorkerArtifactUploadRequest,
     WorkerCertificateBundle,
     WorkerClaimRequest,
     WorkerEnrollmentRequest,
@@ -155,3 +163,88 @@ def test_worker_input_artifact_is_bounded_and_digest_verified(tmp_path: Path) ->
         assert client.input_artifact(artifact_id, max_bytes=len(content)) == content
         with pytest.raises(MishkanError, match="exceeds worker bound"):
             client.input_artifact(artifact_id, max_bytes=len(content) - 1)
+
+
+def test_worker_artifact_upload_streams_under_lease_token(tmp_path: Path) -> None:
+    content = b"streamed-worker-output"
+    digest = f"sha256:{hashlib.sha256(content).hexdigest()}"
+    lease_id = uuid4()
+    upload_id = uuid4()
+    worker_id = uuid4()
+    token = SecretStr("worker-retained-lease-secret-that-is-long-enough")
+    provenance = ArtifactProvenance(
+        producer_identity=f"worker:{worker_id}",
+        run_id=str(uuid4()),
+        task_attempt_id=str(uuid4()),
+        call_id="worker-output",
+        capability="crewai.task.execute",
+        channel="worker-output",
+    )
+    request_model = WorkerArtifactUploadRequest(
+        expected_size=len(content),
+        expected_digest=digest,
+        media_type="text/plain",
+        provenance=provenance,
+    )
+    manifest = ArtifactManifest(
+        digest=digest,
+        size_bytes=len(content),
+        declared_media_type="text/plain",
+        provenance=provenance,
+        sensitivity="internal",
+        retention="run",
+        validation=ArtifactValidation.INTEGRITY_VERIFIED,
+        lifecycle=ArtifactLifecycle.AVAILABLE,
+        storage_ref=f"sha256/{digest[7:9]}/{digest[9:]}",
+    )
+    received = bytearray()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["x-mishkan-lease-token"] == token.get_secret_value()
+        if request.url.path == f"/v1/workers/leases/{lease_id}/artifacts":
+            return httpx.Response(
+                200,
+                json=UploadSession(
+                    upload_id=upload_id,
+                    expected_size=len(content),
+                    expected_digest=digest,
+                    media_type="text/plain",
+                    offset=0,
+                    lifecycle="staging",
+                ).model_dump(mode="json"),
+            )
+        if request.url.path == f"/v1/workers/artifact-uploads/{upload_id}":
+            assert int(request.url.params["offset"]) == len(received)
+            received.extend(request.content)
+            return httpx.Response(
+                200,
+                json=UploadSession(
+                    upload_id=upload_id,
+                    expected_size=len(content),
+                    expected_digest=digest,
+                    media_type="text/plain",
+                    offset=len(received),
+                    lifecycle="staging",
+                ).model_dump(mode="json"),
+            )
+        assert request.url.path == f"/v1/workers/artifact-uploads/{upload_id}/commit"
+        return httpx.Response(200, json=manifest.model_dump(mode="json"))
+
+    ca, certificate, key = _paths(tmp_path)
+    with WorkerHttpClient(
+        "https://daemon.test",
+        ca_certificate=ca,
+        client_certificate=certificate,
+        client_private_key=key,
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        uploaded = client.upload_artifact(
+            lease_id,
+            token,
+            content,
+            request_model,
+            chunk_bytes=4,
+        )
+
+    assert bytes(received) == content
+    assert uploaded == manifest

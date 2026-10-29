@@ -1122,6 +1122,19 @@ class WorkerTaskAcceptanceRow(Base):
     accepted_at: Mapped[str] = mapped_column(String(40), nullable=False)
 
 
+class WorkerArtifactUploadRow(Base):
+    __tablename__ = "worker_artifact_uploads"
+
+    upload_id: Mapped[str] = mapped_column(ForeignKey("artifact_uploads.id"), primary_key=True)
+    lease_id: Mapped[str] = mapped_column(ForeignKey("worker_task_leases.id"), nullable=False)
+    worker_id: Mapped[str] = mapped_column(ForeignKey("worker_identities.id"), nullable=False)
+    artifact_id: Mapped[str | None] = mapped_column(ForeignKey("artifacts.id"), unique=True)
+    expected_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
 @dataclass(frozen=True, slots=True)
 class RunSnapshot:
     run_id: str

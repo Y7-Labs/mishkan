@@ -1,0 +1,155 @@
+{
+  "$defs": {
+    "ArtifactProvenance": {
+      "additionalProperties": false,
+      "properties": {
+        "call_id": {
+          "minLength": 1,
+          "title": "Call Id",
+          "type": "string"
+        },
+        "capability": {
+          "minLength": 1,
+          "title": "Capability",
+          "type": "string"
+        },
+        "channel": {
+          "pattern": "^[a-z][a-z0-9_.-]{1,63}$",
+          "title": "Channel",
+          "type": "string"
+        },
+        "configuration_fingerprint": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Configuration Fingerprint"
+        },
+        "declared_loss": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Declared Loss"
+        },
+        "engine": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Engine"
+        },
+        "engine_version": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Engine Version"
+        },
+        "producer_identity": {
+          "minLength": 1,
+          "title": "Producer Identity",
+          "type": "string"
+        },
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "source_artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Artifacts",
+          "type": "array"
+        },
+        "task_attempt_id": {
+          "minLength": 1,
+          "title": "Task Attempt Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "producer_identity",
+        "run_id",
+        "task_attempt_id",
+        "call_id",
+        "capability",
+        "channel"
+      ],
+      "title": "ArtifactProvenance",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "expected_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Expected Digest",
+      "type": "string"
+    },
+    "expected_size": {
+      "minimum": 0,
+      "title": "Expected Size",
+      "type": "integer"
+    },
+    "media_type": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Media Type",
+      "type": "string"
+    },
+    "provenance": {
+      "$ref": "#/$defs/ArtifactProvenance"
+    },
+    "retention": {
+      "default": "run",
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Retention",
+      "type": "string"
+    },
+    "sensitivity": {
+      "default": "internal",
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Sensitivity",
+      "type": "string"
+    }
+  },
+  "required": [
+    "expected_size",
+    "expected_digest",
+    "media_type",
+    "provenance"
+  ],
+  "title": "WorkerArtifactUploadRequest",
+  "type": "object"
+}

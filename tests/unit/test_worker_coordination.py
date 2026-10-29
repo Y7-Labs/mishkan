@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -8,6 +9,8 @@ import pytest
 from pydantic import SecretStr
 from sqlalchemy.orm import Session
 
+from mishkan.artifacts import ArtifactProvenance
+from mishkan.artifacts.service import DurableArtifactService
 from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.domain.time import utc_now
 from mishkan.persistence import LocalRunRepository, SchemaManager
@@ -36,6 +39,7 @@ from mishkan.workers import (
     TaskInputReference,
     TaskPathScope,
     TaskResourceLimits,
+    WorkerArtifactUploadRequest,
     WorkerAvailability,
     WorkerClaimRequest,
     WorkerCompletionState,
@@ -525,6 +529,156 @@ def test_worker_reads_only_artifacts_referenced_by_an_active_lease(tmp_path: Pat
     coordination.expire_leases(now=grant.lease.expires_at + timedelta(seconds=1))
     with pytest.raises(MishkanError):
         service.authorize_input_artifact(worker_id, artifact_id)
+
+
+def test_completion_accepts_only_artifacts_uploaded_under_the_exact_lease(
+    tmp_path: Path,
+) -> None:
+    database, _runs, coordination, service, run_id, task_row_id, worker_id = _setup(tmp_path)
+    grant = service.issue(_envelope(run_id, task_row_id, worker_id))
+    content = b"worker evidence"
+    digest = f"sha256:{hashlib.sha256(content).hexdigest()}"
+    provenance = ArtifactProvenance(
+        producer_identity=f"worker:{worker_id}",
+        run_id=str(run_id),
+        task_attempt_id=str(grant.envelope.id),
+        call_id="remote-task-output",
+        capability="crewai.task.execute",
+        channel="worker-output",
+    )
+    request = WorkerArtifactUploadRequest(
+        expected_size=len(content),
+        expected_digest=digest,
+        media_type="text/plain",
+        provenance=provenance,
+    )
+    artifacts = DurableArtifactService(
+        database,
+        tmp_path / "artifacts",
+        max_artifact_bytes=1024,
+        max_chunk_bytes=1024,
+    )
+    upload = artifacts.open_upload(
+        expected_size=request.expected_size,
+        expected_digest=request.expected_digest,
+        media_type=request.media_type,
+        provenance=request.provenance,
+    )
+    service.register_artifact_upload(
+        worker_id,
+        grant.lease.id,
+        upload.upload_id,
+        request,
+        grant.lease_token,
+    )
+    artifacts.append_chunk(upload.upload_id, offset=0, content=content)
+    manifest = artifacts.commit_upload(upload.upload_id)
+    service.complete_artifact_upload(
+        worker_id,
+        upload.upload_id,
+        manifest.id,
+        grant.lease_token,
+    )
+    result = _result()
+    unrelated_content = b"unrelated"
+    unrelated_digest = f"sha256:{hashlib.sha256(unrelated_content).hexdigest()}"
+    unrelated_upload = artifacts.open_upload(
+        expected_size=len(unrelated_content),
+        expected_digest=unrelated_digest,
+        media_type="text/plain",
+        provenance=provenance.model_copy(update={"call_id": "outside-lease-binding"}),
+    )
+    artifacts.append_chunk(unrelated_upload.upload_id, offset=0, content=unrelated_content)
+    unrelated = artifacts.commit_upload(unrelated_upload.upload_id)
+    with pytest.raises(MishkanError, match="outside its active lease"):
+        service.complete(
+            worker_id,
+            WorkerCompletionSubmission(
+                envelope_id=grant.envelope.id,
+                lease_id=grant.lease.id,
+                execution_context_revision="b" * 40,
+                repository_revision="b" * 40,
+                result=result.model_dump(mode="json"),
+                artifact_ids=(unrelated.id,),
+                effect_report=EffectReportState.NOT_APPLICABLE,
+            ),
+            grant.lease_token,
+        )
+    submission = WorkerCompletionSubmission(
+        envelope_id=grant.envelope.id,
+        lease_id=grant.lease.id,
+        execution_context_revision="b" * 40,
+        repository_revision="b" * 40,
+        result=result.model_dump(mode="json"),
+        artifact_ids=(manifest.id,),
+        effect_report=EffectReportState.NOT_APPLICABLE,
+    )
+
+    delivered = service.complete(worker_id, submission, grant.lease_token)
+
+    assert delivered.artifact_ids == (manifest.id,)
+    assert coordination.completion(delivered.id).artifact_ids == (manifest.id,)
+
+
+def test_artifact_upload_reservations_share_the_envelope_result_bound(tmp_path: Path) -> None:
+    database, _runs, _coordination, service, run_id, task_row_id, worker_id = _setup(tmp_path)
+    envelope = _envelope(run_id, task_row_id, worker_id).model_copy(
+        update={
+            "resources": TaskResourceLimits(
+                timeout_seconds=300,
+                memory_bytes=512 * 1024 * 1024,
+                cpu_count=2,
+                max_result_bytes=10,
+            )
+        }
+    )
+    grant = service.issue(envelope)
+    artifacts = DurableArtifactService(
+        database,
+        tmp_path / "artifacts",
+        max_artifact_bytes=1024,
+        max_chunk_bytes=1024,
+    )
+    provenance = ArtifactProvenance(
+        producer_identity=f"worker:{worker_id}",
+        run_id=str(run_id),
+        task_attempt_id=str(grant.envelope.id),
+        call_id="bounded-output",
+        capability="crewai.task.execute",
+        channel="worker-output",
+    )
+    for index in range(2):
+        content = bytes([index]) * 6
+        digest = f"sha256:{hashlib.sha256(content).hexdigest()}"
+        request = WorkerArtifactUploadRequest(
+            expected_size=len(content),
+            expected_digest=digest,
+            media_type="application/octet-stream",
+            provenance=provenance.model_copy(update={"call_id": f"bounded-output-{index}"}),
+        )
+        upload = artifacts.open_upload(
+            expected_size=request.expected_size,
+            expected_digest=request.expected_digest,
+            media_type=request.media_type,
+            provenance=request.provenance,
+        )
+        if index == 0:
+            service.register_artifact_upload(
+                worker_id,
+                grant.lease.id,
+                upload.upload_id,
+                request,
+                grant.lease_token,
+            )
+        else:
+            with pytest.raises(MishkanError, match="result bound"):
+                service.register_artifact_upload(
+                    worker_id,
+                    grant.lease.id,
+                    upload.upload_id,
+                    request,
+                    grant.lease_token,
+                )
 
 
 def test_heartbeat_refuses_invalid_bounds_unknown_leases_and_stale_workers(

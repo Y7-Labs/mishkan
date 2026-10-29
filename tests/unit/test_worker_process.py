@@ -117,6 +117,7 @@ class _Executor:
 
 class _Client:
     def __init__(self, claim: WorkerTaskClaim) -> None:
+        self.claim_template = claim
         self.claim_value = claim
         self.claim_requests: list[WorkerClaimRequest] = []
         self.heartbeats: list[WorkerHeartbeat] = []
@@ -144,10 +145,10 @@ class _Client:
         return value
 
     def begin(self, _lease_id, _token):  # type: ignore[no-untyped-def]
-        return CLAIM.lease
+        return self.claim_template.lease
 
     def renew(self, _lease_id, _token, *, expected_revision):  # type: ignore[no-untyped-def]
-        return CLAIM.lease.model_copy(update={"revision": expected_revision + 1})
+        return self.claim_template.lease.model_copy(update={"revision": expected_revision + 1})
 
     def input_artifact(self, _artifact_id, *, max_bytes):  # type: ignore[no-untyped-def]
         del max_bytes
@@ -163,7 +164,7 @@ class _Client:
             created_at=submission.created_at,
             envelope_id=submission.envelope_id,
             lease_id=submission.lease_id,
-            worker_id=WORKER_ID,
+            worker_id=self.claim_template.envelope.worker_id,
             fingerprint=submission.fingerprint,
             state=WorkerCompletionState.DELIVERED,
             result=submission.result,
@@ -176,7 +177,6 @@ class _Client:
 
 
 WORKER_ID = uuid4()
-CLAIM = _claim(WORKER_ID)
 
 
 def _process(tmp_path: Path, client: _Client, executor: _Executor) -> WorkerProcess:
@@ -192,7 +192,7 @@ def _process(tmp_path: Path, client: _Client, executor: _Executor) -> WorkerProc
 
 
 def test_worker_process_claims_executes_and_delivers_once(tmp_path: Path) -> None:
-    client = _Client(CLAIM)
+    client = _Client(_claim(WORKER_ID))
     executor = _Executor()
     process = _process(tmp_path, client, executor)
 
@@ -209,7 +209,7 @@ def test_worker_process_claims_executes_and_delivers_once(tmp_path: Path) -> Non
 def test_lost_completion_response_replays_same_submission_without_reexecution(
     tmp_path: Path,
 ) -> None:
-    client = _Client(CLAIM)
+    client = _Client(_claim(WORKER_ID))
     client.fail_completions = 1
     executor = _Executor()
     process = _process(tmp_path, client, executor)
@@ -228,7 +228,7 @@ def test_lost_completion_response_replays_same_submission_without_reexecution(
 
 
 def test_claim_request_and_secret_survive_ambiguous_claim_response(tmp_path: Path) -> None:
-    client = _Client(CLAIM)
+    client = _Client(_claim(WORKER_ID))
     executor = _Executor()
     process = _process(tmp_path, client, executor)
     original_claim = client.claim

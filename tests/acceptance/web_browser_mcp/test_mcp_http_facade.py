@@ -137,7 +137,7 @@ async def test_official_sdk_uses_authenticated_stateless_daemon_facade(tmp_path:
     assert health.isError is False
     assert health.structuredContent == {
         "status": "ready",
-        "schema": "distributed_placement_v1",
+        "schema": "distributed_worker_artifacts_v1",
     }
     assert result.isError is False
     assert result.structuredContent is not None

@@ -9,8 +9,10 @@ from uuid import UUID
 import httpx
 from pydantic import SecretStr
 
+from mishkan.artifacts import ArtifactManifest, UploadSession
 from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.workers.models import (
+    WorkerArtifactUploadRequest,
     WorkerCertificateBundle,
     WorkerCertificateRotationRequest,
     WorkerClaimRequest,
@@ -170,6 +172,54 @@ class WorkerHttpClient:
         if expected != f"sha256:{digest.hexdigest()}":
             raise MishkanError(ErrorCode.ARTIFACT, "artifact input digest does not match")
         return bytes(content)
+
+    def upload_artifact(
+        self,
+        lease_id: UUID,
+        lease_token: SecretStr,
+        content: bytes,
+        request: WorkerArtifactUploadRequest,
+        *,
+        chunk_bytes: int,
+    ) -> ArtifactManifest:
+        if len(content) != request.expected_size:
+            raise MishkanError(ErrorCode.ARTIFACT, "worker artifact size differs from its request")
+        observed = f"sha256:{hashlib.sha256(content).hexdigest()}"
+        if observed != request.expected_digest:
+            raise MishkanError(
+                ErrorCode.ARTIFACT,
+                "worker artifact digest differs from its request",
+            )
+        if chunk_bytes < 1:
+            raise MishkanError(ErrorCode.OUTPUT_CONTRACT, "worker artifact chunk bound is invalid")
+        response = self._client.post(
+            f"/v1/workers/leases/{lease_id}/artifacts",
+            headers=self._lease_headers(lease_token),
+            json=request.model_dump(mode="json"),
+        )
+        response.raise_for_status()
+        upload = UploadSession.model_validate(response.json())
+        offset = 0
+        while offset < len(content):
+            chunk = content[offset : offset + chunk_bytes]
+            response = self._client.put(
+                f"/v1/workers/artifact-uploads/{upload.upload_id}",
+                headers={
+                    **self._lease_headers(lease_token),
+                    "Content-Type": "application/octet-stream",
+                },
+                params={"offset": offset},
+                content=chunk,
+            )
+            response.raise_for_status()
+            upload = UploadSession.model_validate(response.json())
+            offset = upload.offset
+        response = self._client.post(
+            f"/v1/workers/artifact-uploads/{upload.upload_id}/commit",
+            headers=self._lease_headers(lease_token),
+        )
+        response.raise_for_status()
+        return ArtifactManifest.model_validate(response.json())
 
     @staticmethod
     def _lease_headers(lease_token: SecretStr) -> dict[str, str]:

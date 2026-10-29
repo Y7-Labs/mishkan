@@ -240,6 +240,7 @@ from mishkan.tools.lifecycle import ToolRegistryLifecycle
 from mishkan.web.network import HttpxWebTransport
 from mishkan.workers.coordination import WorkerCoordinationRepository
 from mishkan.workers.models import (
+    WorkerArtifactUploadRequest,
     WorkerCertificateBundle,
     WorkerCertificateRotationRequest,
     WorkerClaimRequest,
@@ -1743,6 +1744,123 @@ def create_app(
                 "X-Mishkan-Artifact-Digest": manifest.digest,
             },
         )
+
+    @app.post(
+        "/v1/workers/leases/{lease_id}/artifacts",
+        response_model=UploadSession,
+    )
+    async def worker_artifact_open(
+        lease_id: UUID,
+        upload_request: WorkerArtifactUploadRequest,
+        request: Request,
+        lease_token: Annotated[
+            str,
+            Header(alias="X-Mishkan-Lease-Token", min_length=43, max_length=256),
+        ],
+    ) -> UploadSession:
+        if worker_coordination is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker coordination is not configured",
+            )
+        identity, _serial = await _thread_call(authenticated_worker, request)
+        upload = await _thread_call(
+            artifacts.open_upload,
+            expected_size=upload_request.expected_size,
+            expected_digest=upload_request.expected_digest,
+            media_type=upload_request.media_type,
+            provenance=upload_request.provenance,
+            sensitivity=upload_request.sensitivity,
+            retention=upload_request.retention,
+        )
+        try:
+            await _thread_call(
+                worker_coordination.register_artifact_upload,
+                identity.id,
+                lease_id,
+                upload.upload_id,
+                upload_request,
+                SecretStr(lease_token),
+            )
+        except Exception:
+            await _thread_call(artifacts.abort_upload, upload.upload_id)
+            raise
+        return upload
+
+    @app.put(
+        "/v1/workers/artifact-uploads/{upload_id}",
+        response_model=UploadSession,
+    )
+    async def worker_artifact_chunk(
+        upload_id: UUID,
+        request: Request,
+        offset: Annotated[int, Query(ge=0)],
+        lease_token: Annotated[
+            str,
+            Header(alias="X-Mishkan-Lease-Token", min_length=43, max_length=256),
+        ],
+    ) -> UploadSession:
+        if worker_coordination is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker coordination is not configured",
+            )
+        identity, _serial = await _thread_call(authenticated_worker, request)
+        await _thread_call(
+            worker_coordination.authorize_artifact_upload,
+            identity.id,
+            upload_id,
+            SecretStr(lease_token),
+        )
+        content = bytearray()
+        async for chunk in request.stream():
+            if len(content) + len(chunk) > artifact_config.chunk_bytes:
+                raise MishkanError(
+                    ErrorCode.ARTIFACT,
+                    "worker artifact chunk exceeds configured backpressure",
+                )
+            content.extend(chunk)
+        return await _thread_call(
+            artifacts.append_chunk,
+            upload_id,
+            offset=offset,
+            content=bytes(content),
+        )
+
+    @app.post(
+        "/v1/workers/artifact-uploads/{upload_id}/commit",
+        response_model=ArtifactManifest,
+    )
+    async def worker_artifact_commit(
+        upload_id: UUID,
+        request: Request,
+        lease_token: Annotated[
+            str,
+            Header(alias="X-Mishkan-Lease-Token", min_length=43, max_length=256),
+        ],
+    ) -> ArtifactManifest:
+        if worker_coordination is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker coordination is not configured",
+            )
+        identity, _serial = await _thread_call(authenticated_worker, request)
+        secret = SecretStr(lease_token)
+        await _thread_call(
+            worker_coordination.authorize_artifact_upload,
+            identity.id,
+            upload_id,
+            secret,
+        )
+        manifest = await _thread_call(artifacts.commit_upload, upload_id)
+        await _thread_call(
+            worker_coordination.complete_artifact_upload,
+            identity.id,
+            upload_id,
+            manifest.id,
+            secret,
+        )
+        return manifest
 
     @app.get("/v1/workers", response_model=None)
     async def worker_list(

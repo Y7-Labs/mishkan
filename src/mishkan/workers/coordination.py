@@ -19,6 +19,7 @@ from mishkan.persistence.migration import SchemaManager
 from mishkan.persistence.runtime import DatabaseTarget
 from mishkan.persistence.sqlite import (
     AcceptanceRow,
+    ArtifactRow,
     OutboxRow,
     PlanRow,
     RemoteTaskEnvelopeRow,
@@ -26,6 +27,7 @@ from mishkan.persistence.sqlite import (
     ResultRow,
     RunRow,
     TaskRow,
+    WorkerArtifactUploadRow,
     WorkerCompletionRow,
     WorkerHeartbeatRow,
     WorkerIdentityRow,
@@ -44,6 +46,7 @@ from mishkan.workers.models import (
     RemotePlacementRequest,
     RemotePlacementState,
     TaskResourceLimits,
+    WorkerArtifactUploadRequest,
     WorkerAvailability,
     WorkerClaimRequest,
     WorkerCompletion,
@@ -764,6 +767,11 @@ class WorkerCoordinationRepository:
                 raise MishkanError(ErrorCode.WORKER, "completion authority does not match worker")
             self._require_token(lease, token_digest)
             immutable = self._envelope(envelope)
+            self._validate_completion_artifacts(
+                session,
+                lease,
+                submission,
+            )
             stale_reason = self._completion_stale_reason(
                 immutable,
                 lease,
@@ -1153,6 +1161,129 @@ class WorkerCoordinationRepository:
             "worker has no active lease for the requested input artifact",
         )
 
+    def register_artifact_upload(
+        self,
+        worker_id: UUID,
+        lease_id: UUID,
+        upload_id: UUID,
+        request: WorkerArtifactUploadRequest,
+        *,
+        token_digest: str,
+    ) -> None:
+        now = utc_now()
+        with Session(self._engine) as session, session.begin():
+            lease, envelope_row = self._active_lease(
+                session,
+                worker_id,
+                lease_id,
+                token_digest=token_digest,
+                now=now,
+            )
+            envelope = self._envelope(envelope_row)
+            reserved_bytes = session.scalar(
+                select(func.coalesce(func.sum(WorkerArtifactUploadRow.expected_size), 0)).where(
+                    WorkerArtifactUploadRow.lease_id == lease.id,
+                    WorkerArtifactUploadRow.state.in_(("staging", "committed")),
+                )
+            )
+            if (
+                int(reserved_bytes or 0) + request.expected_size
+                > envelope.resources.max_result_bytes
+            ):
+                raise MishkanError(
+                    ErrorCode.ARTIFACT,
+                    "worker artifacts exceed the immutable task result bound",
+                )
+            if (
+                request.provenance.producer_identity != f"worker:{worker_id}"
+                or request.provenance.run_id != str(envelope.run_id)
+                or request.provenance.task_attempt_id != str(envelope.id)
+            ):
+                raise MishkanError(
+                    ErrorCode.AUTHORITY_NOT_GRANTED,
+                    "worker artifact provenance differs from its active lease",
+                )
+            existing = session.get(WorkerArtifactUploadRow, str(upload_id))
+            if existing is not None:
+                if (
+                    existing.lease_id != lease.id
+                    or existing.worker_id != str(worker_id)
+                    or existing.expected_size != request.expected_size
+                ):
+                    raise MishkanError(
+                        ErrorCode.DUPLICATE_RESULT,
+                        "worker artifact upload identity was reused",
+                    )
+                return
+            session.add(
+                WorkerArtifactUploadRow(
+                    upload_id=str(upload_id),
+                    lease_id=lease.id,
+                    worker_id=str(worker_id),
+                    artifact_id=None,
+                    expected_size=request.expected_size,
+                    state="staging",
+                    created_at=now.isoformat(),
+                    updated_at=now.isoformat(),
+                )
+            )
+
+    def authorize_artifact_upload(
+        self,
+        worker_id: UUID,
+        upload_id: UUID,
+        *,
+        token_digest: str,
+    ) -> UUID:
+        now = utc_now()
+        with Session(self._engine) as session:
+            row = session.get(WorkerArtifactUploadRow, str(upload_id))
+            if row is None or row.worker_id != str(worker_id):
+                raise MishkanError(ErrorCode.AUTHORITY_NOT_GRANTED, "worker upload is not owned")
+            self._active_lease(
+                session,
+                worker_id,
+                UUID(row.lease_id),
+                token_digest=token_digest,
+                now=now,
+            )
+            return UUID(row.lease_id)
+
+    def complete_artifact_upload(
+        self,
+        worker_id: UUID,
+        upload_id: UUID,
+        artifact_id: UUID,
+        *,
+        token_digest: str,
+    ) -> None:
+        now = utc_now()
+        with Session(self._engine) as session, session.begin():
+            row = session.scalar(
+                select(WorkerArtifactUploadRow)
+                .where(WorkerArtifactUploadRow.upload_id == str(upload_id))
+                .with_for_update()
+            )
+            if row is None or row.worker_id != str(worker_id):
+                raise MishkanError(ErrorCode.AUTHORITY_NOT_GRANTED, "worker upload is not owned")
+            self._active_lease(
+                session,
+                worker_id,
+                UUID(row.lease_id),
+                token_digest=token_digest,
+                now=now,
+            )
+            if row.state == "committed" and row.artifact_id == str(artifact_id):
+                return
+            if row.state != "staging":
+                raise MishkanError(ErrorCode.ARTIFACT, "worker upload is not committable")
+            artifact = session.get(ArtifactRow, str(artifact_id))
+            if artifact is None or artifact.lifecycle != "available":
+                raise MishkanError(ErrorCode.ARTIFACT, "worker artifact is not available")
+            row.artifact_id = str(artifact_id)
+            row.state = "committed"
+            row.updated_at = now.isoformat()
+
     @staticmethod
     def _active_worker(session: Session, worker_id: UUID, *, lock: bool) -> WorkerIdentityRow:
         statement = select(WorkerIdentityRow).where(WorkerIdentityRow.id == str(worker_id))
@@ -1271,6 +1402,37 @@ class WorkerCoordinationRepository:
         ):
             return "stateful task omitted effect-settlement evidence"
         return None
+
+    @staticmethod
+    def _validate_completion_artifacts(
+        session: Session,
+        lease: WorkerLeaseRow,
+        submission: WorkerCompletionSubmission,
+    ) -> None:
+        references = {
+            *submission.artifact_ids,
+            *submission.effect_evidence_artifact_ids,
+            *(
+                (submission.unified_patch_artifact_id,)
+                if submission.unified_patch_artifact_id is not None
+                else ()
+            ),
+        }
+        for artifact_id in references:
+            upload = session.scalar(
+                select(WorkerArtifactUploadRow).where(
+                    WorkerArtifactUploadRow.artifact_id == str(artifact_id),
+                    WorkerArtifactUploadRow.lease_id == lease.id,
+                    WorkerArtifactUploadRow.worker_id == lease.worker_id,
+                    WorkerArtifactUploadRow.state == "committed",
+                )
+            )
+            artifact = session.get(ArtifactRow, str(artifact_id))
+            if upload is None or artifact is None or artifact.lifecycle != "available":
+                raise MishkanError(
+                    ErrorCode.ARTIFACT,
+                    "worker completion references an artifact outside its active lease",
+                )
 
     @staticmethod
     def _heartbeat_record(
