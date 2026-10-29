@@ -7,6 +7,10 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 from pydantic import SecretStr
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -14,13 +18,13 @@ from sqlalchemy.orm import Session
 from mishkan.artifacts import ArtifactProvenance
 from mishkan.artifacts.bodies import S3ArtifactBodyStore
 from mishkan.artifacts.service import DurableArtifactService
+from mishkan.domain.errors import MishkanError
 from mishkan.domain.time import utc_now
 from mishkan.persistence import DatabaseState, LocalRunRepository, SchemaManager
 from mishkan.persistence.runtime import DatabaseRuntime
 from mishkan.persistence.sqlite import (
-    AggregateRevisionRow,
     TaskRow,
-    WorkerIdentityRow,
+    WorkerCompletionRow,
     WorkerTaskAcceptanceRow,
 )
 from mishkan.planning.models import AcceptedPlan, InitializationResult, PlanTask, ReviewDecision
@@ -33,12 +37,17 @@ from mishkan.workers import (
     TaskPathScope,
     TaskResourceLimits,
     WorkerArtifactUploadRequest,
+    WorkerCertificateAuthority,
+    WorkerCertificateBundle,
     WorkerClaimRequest,
     WorkerCompletionState,
     WorkerCompletionSubmission,
     WorkerCoordinationRepository,
     WorkerCoordinationService,
+    WorkerEnrollmentRequest,
+    WorkerEnrollmentService,
     WorkerHeartbeat,
+    WorkerIdentityRepository,
     WorkerResourceSnapshot,
 )
 from mishkan.workers.coordination import lease_token_digest
@@ -90,6 +99,7 @@ def _plan() -> AcceptedPlan:
             ("worker-one-task", ()),
             ("worker-two-task", ()),
             ("recovered-task", ("worker-one-task", "worker-two-task")),
+            ("revision-mismatch-task", ("recovered-task",)),
         )
     )
     return AcceptedPlan(
@@ -128,31 +138,77 @@ def _run(runtime: DatabaseRuntime, root: Path) -> tuple[UUID, dict[str, UUID]]:
     return UUID(snapshot.run_id), {row.task_key: UUID(row.id) for row in tasks}
 
 
-def _worker(runtime: DatabaseRuntime) -> UUID:
+def _enrollment_service(
+    runtime: DatabaseRuntime,
+) -> tuple[WorkerEnrollmentService, WorkerIdentityRepository]:
+    key = ec.generate_private_key(ec.SECP256R1())
+    now = utc_now()
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "MISHKAN I09 gate CA")])
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(days=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=True,
+                crl_sign=True,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    authority = WorkerCertificateAuthority(
+        certificate.public_bytes(serialization.Encoding.PEM).decode(),
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        ).decode(),
+    )
+    repository = WorkerIdentityRepository(runtime)
+    return (
+        WorkerEnrollmentService(
+            repository,
+            authority,
+            enrollment_ttl_seconds=60,
+            certificate_ttl_seconds=3600,
+        ),
+        repository,
+    )
+
+
+def _worker(enrollment: WorkerEnrollmentService) -> tuple[UUID, WorkerCertificateBundle]:
     worker_id = uuid4()
-    now = utc_now().isoformat()
-    with Session(runtime.engine) as session, session.begin():
-        session.add(
-            WorkerIdentityRow(
-                id=str(worker_id),
-                display_name=f"gate-{worker_id}",
-                state="active",
-                current_certificate_serial=str(worker_id.int),
-                revision=1,
-                created_at=now,
-                updated_at=now,
-                revoked_at=None,
-            )
+    credential = enrollment.create_enrollment(actor_id="CTO")
+    key = ec.generate_private_key(ec.SECP256R1())
+    csr = (
+        x509.CertificateSigningRequestBuilder()
+        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, str(worker_id))]))
+        .sign(key, hashes.SHA256())
+        .public_bytes(serialization.Encoding.PEM)
+        .decode()
+    )
+    bundle = enrollment.enroll(
+        WorkerEnrollmentRequest(
+            worker_id=worker_id,
+            display_name=f"gate-{worker_id}",
+            token=credential.token,
+            certificate_signing_request_pem=csr,
         )
-        session.add(
-            AggregateRevisionRow(
-                entity_type="worker",
-                entity_id=str(worker_id),
-                revision=1,
-                updated_at=now,
-            )
-        )
-    return worker_id
+    )
+    return worker_id, bundle
 
 
 def _heartbeat(worker_id: UUID) -> WorkerHeartbeat:
@@ -256,8 +312,9 @@ def test_two_workers_recover_loss_and_accept_exactly_once(tmp_path: Path) -> Non
         else:
             SchemaManager(runtime).require_current()
         run_id, _tasks = _run(runtime, tmp_path)
-        worker_one = _worker(runtime)
-        worker_two = _worker(runtime)
+        enrollment, _identities = _enrollment_service(runtime)
+        worker_one, worker_one_certificate = _worker(enrollment)
+        worker_two, worker_two_certificate = _worker(enrollment)
         repository = WorkerCoordinationRepository(
             runtime,
             heartbeat_timeout_seconds=30,
@@ -382,6 +439,27 @@ def test_two_workers_recover_loss_and_accept_exactly_once(tmp_path: Path) -> Non
             _review("recovered-task"),
         )
         assert refused_duplicate.state is WorkerCompletionState.DUPLICATE
+
+        service.queue(_placement(run_id, "revision-mismatch-task", worker_two))
+        revision_claim, revision_token = _claim(service, worker_two)
+        mismatched = _submission(revision_claim, _result("revision-mismatch-task")).model_copy(
+            update={"execution_context_revision": "f" * 40}
+        )
+        revision_refusal = service.complete(worker_two, mismatched, revision_token)
+        assert revision_refusal.state is WorkerCompletionState.STALE
+        with Session(runtime.engine) as session:
+            revision_row = session.get(WorkerCompletionRow, str(revision_refusal.id))
+            assert revision_row is not None
+            assert revision_row.decision_reason is not None
+            assert "execution-context revision" in revision_row.decision_reason
+
+        enrollment.revoke_worker(worker_one, expected_revision=1)
+        with pytest.raises(MishkanError):
+            enrollment.authenticate_certificate(worker_one_certificate.certificate_pem)
+        assert (
+            enrollment.authenticate_certificate(worker_two_certificate.certificate_pem).id
+            == worker_two
+        )
 
         with Session(runtime.engine) as session:
             acceptances = session.scalars(
