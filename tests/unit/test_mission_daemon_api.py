@@ -46,6 +46,7 @@ from mishkan.environment import (
 from mishkan.missions import (
     AdaptationKind,
     CollaborationEdge,
+    CollaborationExecutionKind,
     CollaborationInteraction,
     CollaborationResponsibility,
     CrewAssignmentKind,
@@ -53,6 +54,7 @@ from mishkan.missions import (
     ExecutiveConfirmation,
     MissionBrief,
     MissionBriefStatus,
+    MissionCollaborationExecution,
     MissionCollaborationPlan,
     MissionCrewMember,
     MissionCrewRevision,
@@ -347,6 +349,20 @@ async def test_collaboration_plan_uses_command_query_snapshot_and_event_surfaces
     )
     brief = _brief(mission)
     crew = _crew(brief)
+    assignment = MissionTaskAssignment(
+        mission_id=mission.mission_id,
+        crew_version=crew.version,
+        task_id="implement-recovery",
+        accountable_owner="Backend_Service_Engineer",
+        assignment_kind=CrewAssignmentKind.PRODUCTION,
+        expected_result="A verified recovery implementation",
+        completion_criteria=("independent recovery test passes",),
+        authority_scope=("repository:api",),
+        exact_tools=("file.read", "file.patch", "process.run"),
+        path_scopes=("repository:api",),
+        limits=(MissionResourceLimit(name="wall_time", value=1_800, unit="seconds"),),
+        required_evidence=("test report", "change set"),
+    )
     plan = MissionCollaborationPlan(
         mission_id=mission.mission_id,
         version=1,
@@ -395,6 +411,16 @@ async def test_collaboration_plan_uses_command_query_snapshot_and_event_surfaces
         evaluator_identity="Product_Functional_Evaluator",
         evidence_references=("artifact:team-evidence",),
     )
+    interaction_command_id = uuid4()
+    explicit_interaction = MissionCollaborationExecution(
+        mission_id=mission.mission_id,
+        collaboration_plan_version=plan.version,
+        kind=CollaborationExecutionKind.CONSULT,
+        participant_ids=("Backend_Service_Engineer", "Product_Functional_Evaluator"),
+        task_ids=(assignment.task_id,),
+        causal_reference=f"command:{interaction_command_id}",
+        evidence_references=("artifact:consultation-evidence",),
+    )
     commands = (
         ApplicationCommand(
             command_type="mission.create",
@@ -421,6 +447,14 @@ async def test_collaboration_plan_uses_command_query_snapshot_and_event_surfaces
             payload={"crew": crew.model_dump(mode="json")},
         ),
         ApplicationCommand(
+            command_type="mission.assignment.record",
+            actor_id=token.principal_id,
+            target_type="mission_assignment",
+            target_id=str(assignment.assignment_id),
+            expected_revision=0,
+            payload={"assignment": assignment.model_dump(mode="json")},
+        ),
+        ApplicationCommand(
             command_type="mission.collaboration.record",
             actor_id=token.principal_id,
             target_type="mission_collaboration",
@@ -433,6 +467,15 @@ async def test_collaboration_plan_uses_command_query_snapshot_and_event_surfaces
             target_type="team_health_evaluation",
             target_id=str(health_request.request_id),
             payload={"request": health_request.model_dump(mode="json")},
+        ),
+        ApplicationCommand(
+            command_id=interaction_command_id,
+            command_type="mission.interaction.record",
+            actor_id=token.principal_id,
+            target_type="mission_interaction",
+            target_id=str(explicit_interaction.interaction_id),
+            expected_revision=0,
+            payload={"interaction": explicit_interaction.model_dump(mode="json")},
         ),
     )
 
@@ -451,6 +494,9 @@ async def test_collaboration_plan_uses_command_query_snapshot_and_event_surfaces
         )
         snapshot = await client.get("/v1/snapshot", headers=headers)
         health = await client.get(f"/v1/missions/{mission.mission_id}/health", headers=headers)
+        interactions = await client.get(
+            f"/v1/missions/{mission.mission_id}/interactions", headers=headers
+        )
         events = await client.get(
             "/v1/events",
             headers=headers,
@@ -461,6 +507,10 @@ async def test_collaboration_plan_uses_command_query_snapshot_and_event_surfaces
     assert collaboration.json()["plan_id"] == str(plan.plan_id)
     assert snapshot.json()["projections"]["team_effectiveness"]["collaboration_plans"]
     assert health.json()[0]["status"] == "healthy"
+    assert interactions.status_code == 200
+    assert {item["kind"] for item in interactions.json()} == {"consult", "evaluate"}
+    assert all(item["task_ids"] == [assignment.task_id] for item in interactions.json())
+    assert snapshot.json()["projections"]["team_effectiveness"]["collaboration_interactions"]
     assert "mission.collaboration_plan_recorded" in {
         item["event_type"] for item in events.json()["events"]
     }

@@ -101,6 +101,7 @@ from mishkan.knowledge import (
 from mishkan.missions import (
     CrewAdaptationDecision,
     MissionBrief,
+    MissionCollaborationExecution,
     MissionCollaborationPlan,
     MissionCompletionReadiness,
     MissionCrewRevision,
@@ -696,6 +697,23 @@ class Mishkan:
         )
         return MissionHandoff.model_validate(result.payload)
 
+    def record_mission_interaction(
+        self, interaction: MissionCollaborationExecution
+    ) -> MissionCollaborationExecution:
+        command_id = UUID(interaction.causal_reference.removeprefix("command:"))
+        result = self.command(
+            ApplicationCommand(
+                command_id=command_id,
+                command_type="mission.interaction.record",
+                actor_id=self.principal_id,
+                target_type="mission_interaction",
+                target_id=str(interaction.interaction_id),
+                expected_revision=0,
+                payload={"interaction": interaction.model_dump(mode="json")},
+            )
+        )
+        return MissionCollaborationExecution.model_validate(result.payload)
+
     def record_mission_assignment(self, assignment: MissionTaskAssignment) -> MissionTaskAssignment:
         result = self.command(
             ApplicationCommand(
@@ -881,6 +899,17 @@ class Mishkan:
         )
         response.raise_for_status()
         return tuple(MissionHandoff.model_validate(item) for item in response.json())
+
+    def mission_interactions(
+        self, mission_id: str, *, limit: int = 1_000
+    ) -> tuple[MissionCollaborationExecution, ...]:
+        response = self._client.get(
+            f"/v1/missions/{quote(mission_id, safe='')}/interactions",
+            headers=self._headers(),
+            params={"limit": limit},
+        )
+        response.raise_for_status()
+        return tuple(MissionCollaborationExecution.model_validate(item) for item in response.json())
 
     def mission_assignments(
         self, mission_id: str, *, limit: int = 1_000

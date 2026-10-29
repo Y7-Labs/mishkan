@@ -222,6 +222,7 @@ rules:
         - mission.retrospective.record
         - mission.signal.record
         - mission.handoff.record
+        - mission.interaction.record
         - conversation.create
         - conversation.message.post
         - mission.decision.record

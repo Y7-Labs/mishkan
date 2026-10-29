@@ -786,6 +786,18 @@ class MissionHandoffRow(Base):
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
 
 
+class MissionCollaborationExecutionRow(Base):
+    __tablename__ = "mission_collaboration_executions"
+
+    interaction_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    mission_id: Mapped[str] = mapped_column(ForeignKey("missions.id"), nullable=False)
+    collaboration_plan_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    causal_reference: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    occurred_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
 class ConversationChannelRow(Base):
     __tablename__ = "conversation_channels"
 

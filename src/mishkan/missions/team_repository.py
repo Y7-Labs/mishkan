@@ -22,6 +22,7 @@ from mishkan.missions.models import (
 )
 from mishkan.missions.team_effectiveness import (
     CrewAdaptationDecision,
+    MissionCollaborationExecution,
     MissionCollaborationPlan,
     MissionHandoff,
     MissionRetrospective,
@@ -35,6 +36,7 @@ from mishkan.persistence.sqlite import (
     CrewAdaptationDecisionRow,
     MissionAssignmentRow,
     MissionBriefRow,
+    MissionCollaborationExecutionRow,
     MissionCollaborationPlanRow,
     MissionCrewRow,
     MissionDecisionRow,
@@ -277,6 +279,57 @@ class SQLiteTeamEffectivenessRepository:
             )
         return handoff
 
+    def record_interaction(
+        self, record: MissionCollaborationExecution
+    ) -> MissionCollaborationExecution:
+        payload = self._json(record)
+        with Session(self._engine) as session, session.begin():
+            existing = session.get(MissionCollaborationExecutionRow, str(record.interaction_id))
+            if existing is not None:
+                return self._idempotent(existing.payload, payload, record)
+            causal = session.scalar(
+                select(MissionCollaborationExecutionRow).where(
+                    MissionCollaborationExecutionRow.causal_reference == record.causal_reference
+                )
+            )
+            if causal is not None:
+                return self._idempotent(causal.payload, payload, record)
+            plan = self._plan(
+                session,
+                str(record.mission_id),
+                record.collaboration_plan_version,
+            )
+            identities = {item.identity_id for item in plan.responsibilities}
+            if not set(record.participant_ids).issubset(identities):
+                raise MishkanError(
+                    ErrorCode.ROLE_CONFLICT,
+                    "collaboration execution names an identity outside the accepted plan",
+                )
+            self._require_tasks(session, record.mission_id, record.task_ids)
+            session.add(
+                MissionCollaborationExecutionRow(
+                    interaction_id=str(record.interaction_id),
+                    mission_id=str(record.mission_id),
+                    collaboration_plan_version=record.collaboration_plan_version,
+                    kind=record.kind.value,
+                    causal_reference=record.causal_reference,
+                    payload=payload,
+                    occurred_at=record.occurred_at.isoformat(),
+                )
+            )
+            self._event(
+                session,
+                record.mission_id,
+                "mission.collaboration_interaction_recorded",
+                {
+                    "interaction_id": str(record.interaction_id),
+                    "kind": record.kind.value,
+                    "task_ids": list(record.task_ids),
+                    "causal_reference": record.causal_reference,
+                },
+            )
+        return record
+
     def collaboration_plan(
         self, mission_id: str, version: int | None = None
     ) -> MissionCollaborationPlan:
@@ -337,6 +390,20 @@ class SQLiteTeamEffectivenessRepository:
             )
             return tuple(MissionHandoff.model_validate_json(row.payload) for row in rows)
 
+    def interactions(
+        self, mission_id: str, *, limit: int = 1_000
+    ) -> tuple[MissionCollaborationExecution, ...]:
+        with Session(self._engine) as session:
+            rows = session.scalars(
+                select(MissionCollaborationExecutionRow)
+                .where(MissionCollaborationExecutionRow.mission_id == mission_id)
+                .order_by(MissionCollaborationExecutionRow.occurred_at)
+                .limit(limit)
+            )
+            return tuple(
+                MissionCollaborationExecution.model_validate_json(row.payload) for row in rows
+            )
+
     def snapshot(self, *, limit: int = 1_000) -> dict[str, object]:
         """Return bounded current projections without creating a second authority."""
         if limit < 1:
@@ -390,11 +457,22 @@ class SQLiteTeamEffectivenessRepository:
                 evaluation.status.value in {"attention", "blocked", "uncertain"}
                 for evaluation in latest_health.values()
             )
+            interaction_rows = session.scalars(
+                select(MissionCollaborationExecutionRow)
+                .order_by(MissionCollaborationExecutionRow.occurred_at.desc())
+                .limit(limit)
+            ).all()
             return {
                 "collaboration_plans": [
                     item.model_dump(mode="json") for item in latest_plans.values()
                 ],
                 "latest_health": [item.model_dump(mode="json") for item in latest_health.values()],
+                "collaboration_interactions": [
+                    MissionCollaborationExecution.model_validate_json(row.payload).model_dump(
+                        mode="json"
+                    )
+                    for row in interaction_rows
+                ],
                 "attention_required": open_attention,
             }
 

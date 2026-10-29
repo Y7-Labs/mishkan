@@ -149,6 +149,7 @@ from mishkan.missions.models import (
 from mishkan.missions.readiness import MissionEnvironmentReadiness
 from mishkan.missions.team_effectiveness import (
     CrewAdaptationDecision,
+    MissionCollaborationExecution,
     MissionCollaborationPlan,
     MissionHandoff,
     MissionRetrospective,
@@ -317,6 +318,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "crewai-mission-governance-request-v1.schema.json": MissionGovernanceRequest,
     "crewai-pm-mission-proposal-v1.schema.json": PMMissionProposal,
     "mission-collaboration-plan-v1.schema.json": MissionCollaborationPlan,
+    "mission-collaboration-execution-v1.schema.json": MissionCollaborationExecution,
     "mission-handoff-v1.schema.json": MissionHandoff,
     "mission-retrospective-v1.schema.json": MissionRetrospective,
     "crewai-mission-environment-output-v1.schema.json": MissionEnvironmentPlanningOutput,

@@ -170,6 +170,7 @@ def test_public_contract_catalogue_exports_deterministically(tmp_path: Path) -> 
         "mcp-primitive-v1.schema.json",
         "mcp-progress-v1.schema.json",
         "mission-brief-v1.schema.json",
+        "mission-collaboration-execution-v1.schema.json",
         "mission-collaboration-plan-v1.schema.json",
         "mission-completion-readiness-v1.schema.json",
         "mission-decision-v1.schema.json",

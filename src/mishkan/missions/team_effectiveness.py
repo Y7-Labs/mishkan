@@ -42,6 +42,16 @@ class CollaborationInteraction(StrEnum):
     EVALUATE = "evaluate"
 
 
+class CollaborationExecutionKind(StrEnum):
+    DELEGATE = "delegate"
+    COLLABORATE = "collaborate"
+    CONSULT = "consult"
+    CHALLENGE = "challenge"
+    HANDOFF = "handoff"
+    EVALUATE = "evaluate"
+    ADAPT = "adapt"
+
+
 class EvidenceComparability(StrEnum):
     DIRECT = "direct"
     PARTIAL = "partial"
@@ -467,6 +477,48 @@ class MissionHandoff(TeamModel):
     def identities_are_distinct(self) -> MissionHandoff:
         if self.from_identity == self.to_identity:
             raise ValueError("handoff producer and recipient must be distinct")
+        return self
+
+
+class MissionCollaborationExecution(TeamModel):
+    """Immutable lineage for one collaboration action that actually occurred."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    interaction_id: UUID = Field(default_factory=new_id)
+    mission_id: UUID
+    collaboration_plan_version: int = Field(ge=1)
+    kind: CollaborationExecutionKind
+    participant_ids: tuple[str, ...] = Field(min_length=2)
+    task_ids: tuple[str, ...] = Field(min_length=1)
+    causal_reference: str = Field(pattern=r"^(command|event):[0-9a-f-]{36}$")
+    evidence_references: tuple[str, ...] = Field(min_length=1)
+    occurred_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator("occurred_at")
+    @classmethod
+    def occurred_at_is_aware(cls, value: datetime) -> datetime:
+        return require_aware(value)
+
+    @field_validator("causal_reference")
+    @classmethod
+    def causal_reference_has_exact_uuid(cls, value: str) -> str:
+        _, _, raw_id = value.partition(":")
+        try:
+            parsed = UUID(raw_id)
+        except ValueError as exc:
+            raise ValueError("collaboration execution causation must contain a UUID") from exc
+        if str(parsed) != raw_id:
+            raise ValueError("collaboration execution causation UUID must be canonical")
+        return value
+
+    @model_validator(mode="after")
+    def lineage_is_unambiguous(self) -> MissionCollaborationExecution:
+        if len(self.participant_ids) != len(set(self.participant_ids)):
+            raise ValueError("collaboration execution participants must be unique")
+        if len(self.task_ids) != len(set(self.task_ids)):
+            raise ValueError("collaboration execution tasks must be unique")
+        if len(self.evidence_references) != len(set(self.evidence_references)):
+            raise ValueError("collaboration execution evidence must be unique")
         return self
 
 

@@ -882,6 +882,32 @@ def mission_health(
     _emit(payload, as_json=_state(ctx).json_output)
 
 
+@mission_app.command("interaction")
+def mission_interaction(
+    ctx: typer.Context,
+    mission_id: str,
+    record_file: Annotated[Path | None, typer.Option("--record")] = None,
+    limit: Annotated[int, typer.Option(min=1, max=10_000)] = 1_000,
+) -> None:
+    """List or record immutable collaboration execution lineage."""
+    from mishkan.missions import MissionCollaborationExecution
+
+    with _daemon_client(ctx) as client:
+        if record_file is None:
+            records = client.mission_interactions(mission_id, limit=limit)
+            payload: object = _dump_models(records)
+        else:
+            interaction = _read_contract(
+                record_file,
+                MissionCollaborationExecution,
+                "--record",
+            )
+            if str(interaction.mission_id) != mission_id:
+                raise typer.BadParameter("collaboration interaction belongs to another mission")
+            payload = client.record_mission_interaction(interaction).model_dump(mode="json")
+    _emit(payload, as_json=_state(ctx).json_output)
+
+
 @mission_app.command("adapt")
 def adapt_mission_crew(
     ctx: typer.Context,

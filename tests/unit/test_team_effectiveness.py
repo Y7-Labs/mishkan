@@ -32,6 +32,7 @@ from mishkan.missions import (
     AdaptationDisposition,
     AdaptationKind,
     CollaborationEdge,
+    CollaborationExecutionKind,
     CollaborationHistoryCitation,
     CollaborationHistorySelector,
     CollaborationInteraction,
@@ -43,6 +44,7 @@ from mishkan.missions import (
     ExecutiveConfirmation,
     MissionBrief,
     MissionBriefStatus,
+    MissionCollaborationExecution,
     MissionCollaborationPlan,
     MissionCrewMember,
     MissionCrewRevision,
@@ -1152,9 +1154,19 @@ def test_repository_persists_immutable_lineage_signals_and_handoffs(tmp_path: Pa
         evidence_references=("artifact:retrospective-evidence",),
         authored_by="Technical_Change_Reporter",
     )
+    interaction = MissionCollaborationExecution(
+        mission_id=mission.mission_id,
+        collaboration_plan_version=plan.version,
+        kind=CollaborationExecutionKind.CONSULT,
+        participant_ids=("Backend_Service_Engineer", "Product_Functional_Evaluator"),
+        task_ids=(assignment.task_id,),
+        causal_reference=f"command:{new_id()}",
+        evidence_references=("artifact:consultation-evidence",),
+    )
     assert repository.record_signal(signal) == signal
     assert repository.record_handoff(handoff) == handoff
     assert repository.record_retrospective(retrospective) == retrospective
+    assert repository.record_interaction(interaction) == interaction
 
     assert repository.collaboration_plan(str(mission.mission_id)) == plan
     assert repository.health(str(mission.mission_id)) == (evaluation,)
@@ -1162,8 +1174,10 @@ def test_repository_persists_immutable_lineage_signals_and_handoffs(tmp_path: Pa
     assert repository.handoffs(str(mission.mission_id)) == (handoff,)
     assert repository.adaptations(str(mission.mission_id)) == (adaptation,)
     assert repository.retrospectives(str(mission.mission_id)) == (retrospective,)
+    assert repository.interactions(str(mission.mission_id)) == (interaction,)
     projection = repository.snapshot()
     assert projection["attention_required"] == 0
+    assert projection["collaboration_interactions"] == [interaction.model_dump(mode="json")]
     event_types = [
         event.event_type
         for event in SQLiteApplicationRepository(database)
@@ -1175,6 +1189,7 @@ def test_repository_persists_immutable_lineage_signals_and_handoffs(tmp_path: Pa
     assert "mission.team_signal_recorded" in event_types
     assert "mission.handoff_recorded" in event_types
     assert "mission.retrospective_recorded" in event_types
+    assert "mission.collaboration_interaction_recorded" in event_types
 
 
 def test_material_adaptation_requires_an_accepted_executive_decision(tmp_path: Path) -> None:

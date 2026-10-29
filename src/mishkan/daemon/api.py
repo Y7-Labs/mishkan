@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
 from typing import Annotated, Literal, ParamSpec, TypeVar
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 import anyio
 from cryptography import x509
@@ -161,7 +161,9 @@ from mishkan.mcp import (
 )
 from mishkan.mcp.sdk import McpStdioCommandBuilder
 from mishkan.missions import (
+    CollaborationExecutionKind,
     MissionBrief,
+    MissionCollaborationExecution,
     MissionCollaborationPlan,
     MissionCompletionReadiness,
     MissionCrewRevision,
@@ -2457,6 +2459,19 @@ def create_app(
         )
         return tuple(record.model_dump(mode="json") for record in records)
 
+    @app.get("/v1/missions/{mission_id}/interactions", response_model=None)
+    async def mission_interactions_get(
+        mission_id: UUID,
+        _principal: TokenRecord = authenticated,
+        limit: Annotated[int, Query(ge=1, le=10_000)] = 1_000,
+    ) -> tuple[dict[str, object], ...]:
+        records = await _thread_call(
+            team_effectiveness_repository.interactions,
+            str(mission_id),
+            limit=limit,
+        )
+        return tuple(record.model_dump(mode="json") for record in records)
+
     @app.get(
         "/v1/missions/{mission_id}/environment-plan",
         response_model=MissionEnvironmentPlanAcceptance,
@@ -3413,6 +3428,26 @@ def _dispatch(
         if team_health is None:
             raise MishkanError(ErrorCode.OUTPUT_CONTRACT, "authorized team evaluation is absent")
         recorded_health = team_effectiveness_repository.record_health(team_health)
+        collaboration_plan = team_effectiveness_repository.collaboration_plan(
+            str(team_health.mission_id), team_health.collaboration_plan_version
+        )
+        task_ids = tuple(
+            item.task_id for item in mission_repository.assignments(str(team_health.mission_id))
+        )
+        if task_ids:
+            _record_collaboration_execution(
+                team_effectiveness_repository,
+                command,
+                mission_id=team_health.mission_id,
+                plan=collaboration_plan,
+                kind=CollaborationExecutionKind.EVALUATE,
+                participant_ids=(
+                    team_health.evaluator_identity,
+                    *collaboration_plan.production_owner_ids,
+                ),
+                task_ids=task_ids,
+                evidence_references=team_health.evidence_references,
+            )
         return "mission.team_health_evaluated", recorded_health.model_dump(mode="json")
     if command.command_type == "mission.health.evaluate":
         health_request = authorized.team_health_evaluation_request
@@ -3499,7 +3534,7 @@ def _dispatch(
             run_events.extend(mission_page.events)
             remaining -= len(mission_page.events)
         if remaining > 0:
-            for channel in conversation_repository.channels(
+            for conversation_channel_record in conversation_repository.channels(
                 mission_id=str(health_request.mission_id),
                 limit=min(1_000, remaining),
             ):
@@ -3507,7 +3542,7 @@ def _dispatch(
                     break
                 conversation_page = repository.events(
                     limit=min(1_000, remaining),
-                    entity_id=str(channel.conversation_id),
+                    entity_id=str(conversation_channel_record.conversation_id),
                     occurred_after=health_request.interval_started_at,
                     occurred_before=health_request.interval_ended_at,
                 )
@@ -3536,12 +3571,49 @@ def _dispatch(
             evidence_references=health_request.evidence_references,
         )
         recorded_health = team_effectiveness_repository.record_health(health_evaluation)
+        task_ids = tuple(dict.fromkeys(item.task_id for item in assignments))
+        if task_ids:
+            _record_collaboration_execution(
+                team_effectiveness_repository,
+                command,
+                mission_id=health_evaluation.mission_id,
+                plan=health_plan,
+                kind=CollaborationExecutionKind.EVALUATE,
+                participant_ids=(
+                    health_evaluation.evaluator_identity,
+                    *health_plan.production_owner_ids,
+                ),
+                task_ids=task_ids,
+                evidence_references=health_evaluation.evidence_references,
+            )
         return "mission.team_health_evaluated", recorded_health.model_dump(mode="json")
     if command.command_type == "mission.adaptation.record":
         adaptation = authorized.crew_adaptation
         if adaptation is None:
             raise MishkanError(ErrorCode.OUTPUT_CONTRACT, "authorized crew adaptation is absent")
         recorded_adaptation = team_effectiveness_repository.record_adaptation(adaptation)
+        adaptation_plan = team_effectiveness_repository.collaboration_plan(
+            str(adaptation.mission_id), adaptation.before_plan_version
+        )
+        affected_owners = tuple(
+            dict.fromkeys(
+                item.accountable_owner
+                for item in mission_repository.assignments(str(adaptation.mission_id))
+                if item.task_id in adaptation.affected_task_ids
+            )
+        )
+        participants = tuple(dict.fromkeys((adaptation.decided_by, *affected_owners)))
+        if len(participants) >= 2:
+            _record_collaboration_execution(
+                team_effectiveness_repository,
+                command,
+                mission_id=adaptation.mission_id,
+                plan=adaptation_plan,
+                kind=CollaborationExecutionKind.ADAPT,
+                participant_ids=participants,
+                task_ids=adaptation.affected_task_ids,
+                evidence_references=adaptation.evidence_references,
+            )
         return "mission.crew_adaptation_recorded", recorded_adaptation.model_dump(mode="json")
     if command.command_type == "mission.retrospective.record":
         retrospective = authorized.mission_retrospective
@@ -3560,7 +3632,34 @@ def _dispatch(
         if handoff is None:
             raise MishkanError(ErrorCode.OUTPUT_CONTRACT, "authorized mission handoff is absent")
         recorded_handoff = team_effectiveness_repository.record_handoff(handoff)
+        handoff_plan = team_effectiveness_repository.collaboration_plan(
+            str(handoff.mission_id), handoff.collaboration_plan_version
+        )
+        _record_collaboration_execution(
+            team_effectiveness_repository,
+            command,
+            mission_id=handoff.mission_id,
+            plan=handoff_plan,
+            kind=CollaborationExecutionKind.HANDOFF,
+            participant_ids=(handoff.from_identity, handoff.to_identity),
+            task_ids=(handoff.task_id,),
+            evidence_references=tuple(
+                dict.fromkeys((*handoff.result_references, *handoff.artifact_references))
+            ),
+        )
         return "mission.handoff_recorded", recorded_handoff.model_dump(mode="json")
+    if command.command_type == "mission.interaction.record":
+        interaction = authorized.mission_interaction
+        if interaction is None:
+            raise MishkanError(
+                ErrorCode.OUTPUT_CONTRACT,
+                "authorized collaboration interaction is absent",
+            )
+        recorded_interaction = team_effectiveness_repository.record_interaction(interaction)
+        return (
+            "mission.collaboration_interaction_recorded",
+            recorded_interaction.model_dump(mode="json"),
+        )
     if command.command_type == "conversation.create":
         channel = authorized.conversation_channel
         if channel is None:
@@ -4322,6 +4421,35 @@ def _dispatch(
         ErrorCode.OUTPUT_CONTRACT,
         "application command type has no registered handler",
         details={"command_type": command.command_type},
+    )
+
+
+def _record_collaboration_execution(
+    repository: SQLiteTeamEffectivenessRepository,
+    command: ApplicationCommand,
+    *,
+    mission_id: UUID,
+    plan: MissionCollaborationPlan,
+    kind: CollaborationExecutionKind,
+    participant_ids: tuple[str, ...],
+    task_ids: tuple[str, ...],
+    evidence_references: tuple[str, ...],
+) -> MissionCollaborationExecution:
+    interaction_id = uuid5(
+        NAMESPACE_URL,
+        f"mishkan:collaboration-execution:{command.command_id}:{kind.value}",
+    )
+    return repository.record_interaction(
+        MissionCollaborationExecution(
+            interaction_id=interaction_id,
+            mission_id=mission_id,
+            collaboration_plan_version=plan.version,
+            kind=kind,
+            participant_ids=participant_ids,
+            task_ids=task_ids,
+            causal_reference=f"command:{command.command_id}",
+            evidence_references=evidence_references,
+        )
     )
 
 

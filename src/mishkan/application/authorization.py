@@ -70,6 +70,7 @@ from mishkan.knowledge import (
 from mishkan.missions import (
     CrewAdaptationDecision,
     MissionBrief,
+    MissionCollaborationExecution,
     MissionCollaborationPlan,
     MissionCrewRevision,
     MissionHandoff,
@@ -420,6 +421,11 @@ COMMAND_SEMANTICS = MappingProxyType(
             "coordination",
             ("mission.handoff.record",),
         ),
+        "mission.interaction.record": CommandSemantics(
+            "application.mission.collaboration",
+            "coordination",
+            ("mission.interaction.record",),
+        ),
         "conversation.create": CommandSemantics(
             "application.conversation.lifecycle", "coordination", ("conversation.create",)
         ),
@@ -583,6 +589,7 @@ _COMMAND_TARGETS = MappingProxyType(
         "mission.retrospective.record": ("mission_retrospective", "uuid"),
         "mission.signal.record": ("team_signal", "uuid"),
         "mission.handoff.record": ("mission_handoff", "uuid"),
+        "mission.interaction.record": ("mission_interaction", "uuid"),
         "conversation.create": ("conversation", "uuid"),
         "conversation.message.post": ("conversation_message", "uuid"),
         "mission.decision.record": ("mission_decision", "uuid"),
@@ -741,6 +748,7 @@ _COMMAND_PAYLOAD_FIELDS = MappingProxyType(
         "mission.retrospective.record": (frozenset({"retrospective"}), frozenset()),
         "mission.signal.record": (frozenset({"signal"}), frozenset()),
         "mission.handoff.record": (frozenset({"handoff"}), frozenset()),
+        "mission.interaction.record": (frozenset({"interaction"}), frozenset()),
         "conversation.create": (frozenset({"channel"}), frozenset()),
         "conversation.message.post": (frozenset({"message"}), frozenset()),
         "mission.decision.record": (frozenset({"decision"}), frozenset()),
@@ -809,6 +817,7 @@ class AuthorizedApplicationCommand:
     mission_retrospective: MissionRetrospective | None = None
     team_signal: TeamSignal | None = None
     mission_handoff: MissionHandoff | None = None
+    mission_interaction: MissionCollaborationExecution | None = None
     conversation_channel: ConversationChannel | None = None
     conversation_message: ConversationMessage | None = None
     mission_decision: MissionDecision | None = None
@@ -916,6 +925,7 @@ class ApplicationCommandAuthority:
         mission_retrospective: MissionRetrospective | None = None
         team_signal: TeamSignal | None = None
         mission_handoff: MissionHandoff | None = None
+        mission_interaction: MissionCollaborationExecution | None = None
         conversation_channel: ConversationChannel | None = None
         conversation_message: ConversationMessage | None = None
         mission_decision: MissionDecision | None = None
@@ -1832,6 +1842,23 @@ class ApplicationCommandAuthority:
                     f"task:{mission_handoff.task_id}",
                     *(f"artifact:{item}" for item in mission_handoff.artifact_references),
                 )
+            elif normalized.command_type == "mission.interaction.record":
+                mission_interaction = MissionCollaborationExecution.model_validate(
+                    normalized.payload["interaction"]
+                )
+                if normalized.target_id != str(mission_interaction.interaction_id):
+                    raise ValueError("interaction target differs from its identity")
+                if mission_interaction.causal_reference != f"command:{normalized.command_id}":
+                    raise MishkanError(
+                        ErrorCode.DECISION_VALIDATION,
+                        "collaboration interaction causation differs from its command",
+                    )
+                external_resources = (
+                    f"mission:{mission_interaction.mission_id}",
+                    *(f"identity:{item}" for item in mission_interaction.participant_ids),
+                    *(f"task:{item}" for item in mission_interaction.task_ids),
+                    *(f"evidence:{item}" for item in mission_interaction.evidence_references),
+                )
             elif normalized.command_type == "conversation.create":
                 conversation_channel = ConversationChannel.model_validate(
                     normalized.payload["channel"]
@@ -2314,6 +2341,7 @@ class ApplicationCommandAuthority:
             mission_retrospective=mission_retrospective,
             team_signal=team_signal,
             mission_handoff=mission_handoff,
+            mission_interaction=mission_interaction,
             conversation_channel=conversation_channel,
             conversation_message=conversation_message,
             mission_decision=mission_decision,
