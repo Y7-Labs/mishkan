@@ -1,0 +1,414 @@
+{
+  "$defs": {
+    "AdaptationKind": {
+      "enum": [
+        "repair_context",
+        "request_consultation",
+        "request_challenge",
+        "split_task",
+        "combine_tasks",
+        "reduce_parallelism",
+        "reassign_within_crew",
+        "pause_dependent_work",
+        "add_crew_member",
+        "change_independence",
+        "change_material_scope",
+        "expand_authority",
+        "accept_consequential_risk"
+      ],
+      "title": "AdaptationKind",
+      "type": "string"
+    },
+    "CollaborationEdge": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_contracts": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Artifact Contracts",
+          "type": "array"
+        },
+        "interaction": {
+          "$ref": "#/$defs/CollaborationInteraction"
+        },
+        "purpose": {
+          "maxLength": 4096,
+          "minLength": 3,
+          "title": "Purpose",
+          "type": "string"
+        },
+        "source_identity": {
+          "maxLength": 128,
+          "minLength": 2,
+          "title": "Source Identity",
+          "type": "string"
+        },
+        "target_identity": {
+          "maxLength": 128,
+          "minLength": 2,
+          "title": "Target Identity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_identity",
+        "target_identity",
+        "interaction",
+        "purpose"
+      ],
+      "title": "CollaborationEdge",
+      "type": "object"
+    },
+    "CollaborationHistoryCitation": {
+      "additionalProperties": false,
+      "properties": {
+        "comparability": {
+          "$ref": "#/$defs/EvidenceComparability"
+        },
+        "evaluated_at": {
+          "format": "date-time",
+          "title": "Evaluated At",
+          "type": "string"
+        },
+        "evaluation_ids": {
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evaluation Ids",
+          "type": "array"
+        },
+        "mission_id": {
+          "format": "uuid",
+          "title": "Mission Id",
+          "type": "string"
+        },
+        "project_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Project Id",
+          "type": "string"
+        },
+        "rationale": {
+          "maxLength": 4096,
+          "minLength": 3,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "task_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Task Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "project_id",
+        "mission_id",
+        "task_ids",
+        "evaluation_ids",
+        "comparability",
+        "rationale",
+        "evaluated_at"
+      ],
+      "title": "CollaborationHistoryCitation",
+      "type": "object"
+    },
+    "CollaborationInteraction": {
+      "enum": [
+        "delegate",
+        "collaborate",
+        "consult",
+        "handoff",
+        "challenge",
+        "evaluate"
+      ],
+      "title": "CollaborationInteraction",
+      "type": "string"
+    },
+    "CollaborationResponsibility": {
+      "additionalProperties": false,
+      "properties": {
+        "decision_rights": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Decision Rights",
+          "type": "array"
+        },
+        "identity_id": {
+          "maxLength": 128,
+          "minLength": 2,
+          "title": "Identity Id",
+          "type": "string"
+        },
+        "responsibility": {
+          "maxLength": 4096,
+          "minLength": 3,
+          "title": "Responsibility",
+          "type": "string"
+        }
+      },
+      "required": [
+        "identity_id",
+        "responsibility",
+        "decision_rights"
+      ],
+      "title": "CollaborationResponsibility",
+      "type": "object"
+    },
+    "EvidenceComparability": {
+      "enum": [
+        "direct",
+        "partial",
+        "stale",
+        "conflicting",
+        "materially_different"
+      ],
+      "title": "EvidenceComparability",
+      "type": "string"
+    },
+    "MissionResourceLimit": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "unit": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Unit",
+          "type": "string"
+        },
+        "value": {
+          "minimum": 0,
+          "title": "Value",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "value",
+        "unit"
+      ],
+      "title": "MissionResourceLimit",
+      "type": "object"
+    },
+    "ProductionShape": {
+      "enum": [
+        "single_owner",
+        "consultative",
+        "multi_producer"
+      ],
+      "title": "ProductionShape",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "alternatives": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Alternatives",
+      "type": "array"
+    },
+    "artifact_references": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Artifact References",
+      "type": "array"
+    },
+    "brief_version": {
+      "minimum": 1,
+      "title": "Brief Version",
+      "type": "integer"
+    },
+    "collaboration_reasons": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Collaboration Reasons",
+      "type": "array"
+    },
+    "communication_budget": {
+      "$ref": "#/$defs/MissionResourceLimit"
+    },
+    "context_references": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Context References",
+      "type": "array"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "crew_version": {
+      "minimum": 1,
+      "title": "Crew Version",
+      "type": "integer"
+    },
+    "crewai_coordination_reference": {
+      "maxLength": 1024,
+      "minLength": 1,
+      "title": "Crewai Coordination Reference",
+      "type": "string"
+    },
+    "cto_confirmation_id": {
+      "format": "uuid",
+      "title": "Cto Confirmation Id",
+      "type": "string"
+    },
+    "escalation_conditions": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Escalation Conditions",
+      "type": "array"
+    },
+    "history_citations": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/CollaborationHistoryCitation"
+      },
+      "title": "History Citations",
+      "type": "array"
+    },
+    "interactions": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/CollaborationEdge"
+      },
+      "title": "Interactions",
+      "type": "array"
+    },
+    "mission_id": {
+      "format": "uuid",
+      "title": "Mission Id",
+      "type": "string"
+    },
+    "permitted_adaptations": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/AdaptationKind"
+      },
+      "title": "Permitted Adaptations",
+      "type": "array"
+    },
+    "plan_id": {
+      "format": "uuid",
+      "title": "Plan Id",
+      "type": "string"
+    },
+    "pm_confirmation_id": {
+      "format": "uuid",
+      "title": "Pm Confirmation Id",
+      "type": "string"
+    },
+    "production_owner_ids": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Production Owner Ids",
+      "type": "array"
+    },
+    "production_shape": {
+      "$ref": "#/$defs/ProductionShape"
+    },
+    "proposal_author_identity": {
+      "maxLength": 128,
+      "minLength": 2,
+      "title": "Proposal Author Identity",
+      "type": "string"
+    },
+    "resource_budgets": {
+      "items": {
+        "$ref": "#/$defs/MissionResourceLimit"
+      },
+      "minItems": 1,
+      "title": "Resource Budgets",
+      "type": "array"
+    },
+    "responsibilities": {
+      "items": {
+        "$ref": "#/$defs/CollaborationResponsibility"
+      },
+      "minItems": 1,
+      "title": "Responsibilities",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "shared_outcome": {
+      "maxLength": 8192,
+      "minLength": 3,
+      "title": "Shared Outcome",
+      "type": "string"
+    },
+    "stop_conditions": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Stop Conditions",
+      "type": "array"
+    },
+    "user_impact": {
+      "maxLength": 8192,
+      "minLength": 3,
+      "title": "User Impact",
+      "type": "string"
+    },
+    "version": {
+      "minimum": 1,
+      "title": "Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "mission_id",
+    "version",
+    "brief_version",
+    "crew_version",
+    "production_shape",
+    "production_owner_ids",
+    "proposal_author_identity",
+    "crewai_coordination_reference",
+    "alternatives",
+    "shared_outcome",
+    "user_impact",
+    "responsibilities",
+    "context_references",
+    "resource_budgets",
+    "communication_budget",
+    "escalation_conditions",
+    "stop_conditions",
+    "pm_confirmation_id",
+    "cto_confirmation_id"
+  ],
+  "title": "MissionCollaborationPlan",
+  "type": "object"
+}

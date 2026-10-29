@@ -1,0 +1,132 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "acceptance_conditions": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Acceptance Conditions",
+      "type": "array"
+    },
+    "artifact_references": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Artifact References",
+      "type": "array"
+    },
+    "changed_assumptions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Changed Assumptions",
+      "type": "array"
+    },
+    "collaboration_plan_version": {
+      "minimum": 1,
+      "title": "Collaboration Plan Version",
+      "type": "integer"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "decisions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Decisions",
+      "type": "array"
+    },
+    "failures": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Failures",
+      "type": "array"
+    },
+    "from_identity": {
+      "maxLength": 128,
+      "minLength": 2,
+      "title": "From Identity",
+      "type": "string"
+    },
+    "handoff_id": {
+      "format": "uuid",
+      "title": "Handoff Id",
+      "type": "string"
+    },
+    "mission_id": {
+      "format": "uuid",
+      "title": "Mission Id",
+      "type": "string"
+    },
+    "required_next_action": {
+      "maxLength": 8192,
+      "minLength": 3,
+      "title": "Required Next Action",
+      "type": "string"
+    },
+    "result_references": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Result References",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "task_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Task Id",
+      "type": "string"
+    },
+    "to_identity": {
+      "maxLength": 128,
+      "minLength": 2,
+      "title": "To Identity",
+      "type": "string"
+    },
+    "uncertainty": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Uncertainty",
+      "type": "array"
+    },
+    "unresolved_questions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Unresolved Questions",
+      "type": "array"
+    }
+  },
+  "required": [
+    "mission_id",
+    "collaboration_plan_version",
+    "from_identity",
+    "to_identity",
+    "task_id",
+    "result_references",
+    "artifact_references",
+    "decisions",
+    "changed_assumptions",
+    "uncertainty",
+    "failures",
+    "unresolved_questions",
+    "required_next_action",
+    "acceptance_conditions"
+  ],
+  "title": "MissionHandoff",
+  "type": "object"
+}

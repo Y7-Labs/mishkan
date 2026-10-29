@@ -1,0 +1,177 @@
+{
+  "$defs": {
+    "TeamDimension": {
+      "enum": [
+        "outcome",
+        "stability",
+        "flow",
+        "coordination",
+        "epistemic_safety",
+        "learning",
+        "resource_efficiency"
+      ],
+      "title": "TeamDimension",
+      "type": "string"
+    },
+    "TeamDimensionAssessment": {
+      "additionalProperties": false,
+      "properties": {
+        "dimension": {
+          "$ref": "#/$defs/TeamDimension"
+        },
+        "evidence_references": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence References",
+          "type": "array"
+        },
+        "observations": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Observations",
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/$defs/TeamHealthStatus"
+        }
+      },
+      "required": [
+        "dimension",
+        "status",
+        "observations",
+        "evidence_references"
+      ],
+      "title": "TeamDimensionAssessment",
+      "type": "object"
+    },
+    "TeamHealthStatus": {
+      "enum": [
+        "healthy",
+        "attention",
+        "blocked",
+        "uncertain"
+      ],
+      "title": "TeamHealthStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "assessments": {
+      "items": {
+        "$ref": "#/$defs/TeamDimensionAssessment"
+      },
+      "maxItems": 7,
+      "minItems": 7,
+      "title": "Assessments",
+      "type": "array"
+    },
+    "collaboration_plan_version": {
+      "minimum": 1,
+      "title": "Collaboration Plan Version",
+      "type": "integer"
+    },
+    "confidence_basis": {
+      "maxLength": 4096,
+      "minLength": 3,
+      "title": "Confidence Basis",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "evaluation_id": {
+      "format": "uuid",
+      "title": "Evaluation Id",
+      "type": "string"
+    },
+    "evaluator_identity": {
+      "maxLength": 128,
+      "minLength": 2,
+      "title": "Evaluator Identity",
+      "type": "string"
+    },
+    "evidence_cursor": {
+      "minimum": 0,
+      "title": "Evidence Cursor",
+      "type": "integer"
+    },
+    "evidence_references": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Evidence References",
+      "type": "array"
+    },
+    "interval_ended_at": {
+      "format": "date-time",
+      "title": "Interval Ended At",
+      "type": "string"
+    },
+    "interval_started_at": {
+      "format": "date-time",
+      "title": "Interval Started At",
+      "type": "string"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Limitations",
+      "type": "array"
+    },
+    "mission_id": {
+      "format": "uuid",
+      "title": "Mission Id",
+      "type": "string"
+    },
+    "risks": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Risks",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/TeamHealthStatus"
+    },
+    "strengths": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Strengths",
+      "type": "array"
+    }
+  },
+  "required": [
+    "mission_id",
+    "collaboration_plan_version",
+    "interval_started_at",
+    "interval_ended_at",
+    "evidence_cursor",
+    "assessments",
+    "strengths",
+    "risks",
+    "limitations",
+    "confidence_basis",
+    "status",
+    "evaluator_identity",
+    "evidence_references"
+  ],
+  "title": "TeamHealthEvaluation",
+  "type": "object"
+}

@@ -935,6 +935,65 @@ class SchedulingConfig(StrictConfigModel):
         return self
 
 
+class TeamEffectivenessConfig(StrictConfigModel):
+    """Public cadence, bounds, and adaptation policy inputs for Mission Crew evidence."""
+
+    evaluation_cadence_events: int = Field(ge=1, le=1_000_000)
+    evaluation_cadence_seconds: int = Field(ge=1, le=2_592_000)
+    evidence_max_events: int = Field(ge=1, le=1_000_000)
+    evidence_max_artifacts: int = Field(ge=1, le=100_000)
+    history_freshness_days: int = Field(ge=1, le=36_500)
+    max_history_candidates: int = Field(ge=1, le=10_000)
+    signal_thresholds: dict[str, float] = Field(min_length=1)
+    resource_budgets: dict[str, int] = Field(min_length=1)
+    automatic_adaptations: tuple[
+        Literal[
+            "repair_context",
+            "request_consultation",
+            "request_challenge",
+            "split_task",
+            "combine_tasks",
+            "reduce_parallelism",
+            "reassign_within_crew",
+            "pause_dependent_work",
+        ],
+        ...,
+    ]
+
+    @field_validator("signal_thresholds")
+    @classmethod
+    def thresholds_are_non_negative(cls, value: dict[str, float]) -> dict[str, float]:
+        if any(not key or threshold < 0 for key, threshold in value.items()):
+            raise ValueError("team-effectiveness signal thresholds must be named and non-negative")
+        required = {
+            "blocked_time_seconds",
+            "queue_time_seconds",
+            "repeated_rejections",
+            "duplicate_work",
+            "missing_handoffs",
+            "workload_share",
+        }
+        if missing := required - set(value):
+            raise ValueError(f"team-effectiveness signal thresholds are missing: {sorted(missing)}")
+        if value["workload_share"] > 1:
+            raise ValueError("team-effectiveness workload share must be at most one")
+        return value
+
+    @field_validator("resource_budgets")
+    @classmethod
+    def budgets_are_non_negative(cls, value: dict[str, int]) -> dict[str, int]:
+        if any(not key or budget < 0 for key, budget in value.items()):
+            raise ValueError("team-effectiveness resource budgets must be named and non-negative")
+        return value
+
+    @field_validator("automatic_adaptations")
+    @classmethod
+    def adaptations_are_unique(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(value) != len(set(value)):
+            raise ValueError("automatic team adaptations must be unique")
+        return value
+
+
 class MishkanConfig(StrictConfigModel):
     """Complete effective configuration required before a run can be accepted."""
 
@@ -974,6 +1033,7 @@ class MishkanConfig(StrictConfigModel):
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     knowledge: KnowledgeConfig | None = None
     scheduling: SchedulingConfig | None = None
+    team_effectiveness: TeamEffectivenessConfig | None = None
     distributed: DistributedConfig | None = None
 
     @field_validator("timezone")
@@ -992,6 +1052,7 @@ class MishkanConfig(StrictConfigModel):
             "1.6",
             "1.7",
             "1.8",
+            "1.9",
         }:
             missing = [
                 field
@@ -1006,7 +1067,7 @@ class MishkanConfig(StrictConfigModel):
                 raise ValueError(
                     f"configuration 1.1 requires governed capability fields: {missing}"
                 )
-        if self.schema_version in {"1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8"}:
+        if self.schema_version in {"1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9"}:
             missing_daemon = [
                 field
                 for field, value in (
@@ -1019,7 +1080,7 @@ class MishkanConfig(StrictConfigModel):
             ]
             if missing_daemon:
                 raise ValueError(f"configuration 1.2 requires daemon fields: {missing_daemon}")
-        if self.schema_version in {"1.3", "1.4", "1.5", "1.6", "1.7", "1.8"}:
+        if self.schema_version in {"1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9"}:
             missing_capabilities = [
                 field
                 for field, value in (
@@ -1056,11 +1117,17 @@ class MishkanConfig(StrictConfigModel):
                 and self.telemetry.exporter.network_profile not in self.web.network_profiles
             ):
                 raise ValueError("telemetry exporter references an unknown network profile")
-        if self.schema_version in {"1.4", "1.5", "1.6", "1.7", "1.8"} and self.skills is None:
+        if (
+            self.schema_version in {"1.4", "1.5", "1.6", "1.7", "1.8", "1.9"}
+            and self.skills is None
+        ):
             raise ValueError("configuration 1.4+ requires the Skills capability configuration")
-        if self.schema_version in {"1.5", "1.6", "1.7", "1.8"} and self.engineering_profile is None:
+        if (
+            self.schema_version in {"1.5", "1.6", "1.7", "1.8", "1.9"}
+            and self.engineering_profile is None
+        ):
             raise ValueError("configuration 1.5+ requires an Engineering profile")
-        if self.schema_version in {"1.6", "1.7", "1.8"}:
+        if self.schema_version in {"1.6", "1.7", "1.8", "1.9"}:
             if self.knowledge is None:
                 raise ValueError("configuration 1.6 requires Knowledge configuration")
             assert self.web is not None
@@ -1089,15 +1156,17 @@ class MishkanConfig(StrictConfigModel):
                     "knowledge configuration references unknown MCP connections: "
                     f"{missing_knowledge_mcp}"
                 )
-        if self.schema_version in {"1.7", "1.8"} and self.scheduling is None:
+        if self.schema_version in {"1.7", "1.8", "1.9"} and self.scheduling is None:
             raise ValueError("configuration 1.7 requires Scheduling configuration")
+        if self.schema_version == "1.9" and self.team_effectiveness is None:
+            raise ValueError("configuration 1.9 requires Team Effectiveness configuration")
         if self.daemon is not None:
             daemon_address = ipaddress.ip_address(self.daemon.host)
             if self.mode is not OperatingMode.DISTRIBUTED and not daemon_address.is_loopback:
                 raise ValueError("non-distributed daemon host must remain loopback-only")
-        if self.mode is OperatingMode.DISTRIBUTED and self.schema_version != "1.8":
-            raise ValueError("distributed mode requires configuration schema 1.8")
-        if self.schema_version == "1.8":
+        if self.mode is OperatingMode.DISTRIBUTED and self.schema_version not in {"1.8", "1.9"}:
+            raise ValueError("distributed mode requires configuration schema 1.8 or newer")
+        if self.schema_version in {"1.8", "1.9"}:
             assert self.daemon is not None
             assert self.persistence is not None
             assert self.artifacts is not None
