@@ -58,6 +58,10 @@ def _authority() -> tuple[object, str, str]:
             ),
             critical=True,
         )
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(key.public_key()),
+            critical=False,
+        )
         .sign(key, hashes.SHA256())
     )
     return (
@@ -93,6 +97,14 @@ def _server_certificate(ca_key: object, ca_pem: str) -> tuple[str, str]:
         .add_extension(
             x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]),
             critical=True,
+        )
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(key.public_key()),
+            critical=False,
+        )
+        .add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(ca.public_key()),
+            critical=False,
         )
         .sign(ca_key, hashes.SHA256())  # type: ignore[arg-type]
     )

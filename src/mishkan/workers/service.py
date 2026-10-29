@@ -1,4 +1,4 @@
-"""Worker enrollment application service."""
+"""Worker enrollment and bounded execution application services."""
 
 from __future__ import annotations
 
@@ -9,12 +9,24 @@ from uuid import UUID
 
 from pydantic import SecretStr
 
+from mishkan.domain.identity import new_id
 from mishkan.domain.time import utc_now
+from mishkan.workers.coordination import WorkerCoordinationRepository, lease_token_digest
 from mishkan.workers.models import (
+    CapabilityRequirement,
+    EffectReportState,
     EnrollmentCredential,
+    ImmutableTaskEnvelope,
+    TaskResourceLimits,
     WorkerCertificateBundle,
+    WorkerCompletion,
+    WorkerCompletionSubmission,
     WorkerEnrollmentRequest,
+    WorkerHeartbeat,
+    WorkerHeartbeatRecord,
     WorkerIdentity,
+    WorkerLease,
+    WorkerLeaseGrant,
     WorkerRotationRequest,
 )
 from mishkan.workers.pki import SignedWorkerCertificate, WorkerCertificateAuthority
@@ -108,3 +120,73 @@ class WorkerEnrollmentService:
     @staticmethod
     def _digest(secret: str) -> str:
         return hashlib.sha256(secret.encode()).hexdigest()
+
+
+class WorkerCoordinationService:
+    """Generate ephemeral lease credentials around the transactional authority."""
+
+    def __init__(self, repository: WorkerCoordinationRepository) -> None:
+        self._repository = repository
+
+    def heartbeat(self, heartbeat: WorkerHeartbeat) -> WorkerHeartbeatRecord:
+        return self._repository.record_heartbeat(heartbeat)
+
+    def compatible_workers(
+        self,
+        requirements: tuple[CapabilityRequirement, ...],
+        resources: TaskResourceLimits,
+    ) -> tuple[WorkerHeartbeatRecord, ...]:
+        return self._repository.compatible_workers(requirements, resources)
+
+    def issue(self, envelope: ImmutableTaskEnvelope) -> WorkerLeaseGrant:
+        secret = secrets.token_urlsafe(32)
+        lease = self._repository.issue_lease(
+            envelope,
+            lease_id=new_id(),
+            token_digest=lease_token_digest(secret),
+        )
+        return WorkerLeaseGrant(
+            envelope=envelope,
+            lease=lease,
+            lease_token=SecretStr(secret),
+        )
+
+    def begin(self, worker_id: UUID, lease_id: UUID, lease_token: SecretStr) -> WorkerLease:
+        return self._repository.begin_execution(
+            worker_id,
+            lease_id,
+            token_digest=lease_token_digest(lease_token.get_secret_value()),
+        )
+
+    def renew(
+        self,
+        worker_id: UUID,
+        lease_id: UUID,
+        lease_token: SecretStr,
+        *,
+        expected_revision: int,
+    ) -> WorkerLease:
+        return self._repository.renew_lease(
+            worker_id,
+            lease_id,
+            token_digest=lease_token_digest(lease_token.get_secret_value()),
+            expected_revision=expected_revision,
+        )
+
+    def complete(
+        self,
+        worker_id: UUID,
+        submission: WorkerCompletionSubmission,
+        lease_token: SecretStr,
+    ) -> WorkerCompletion:
+        return self._repository.deliver_completion(
+            worker_id,
+            submission,
+            token_digest=lease_token_digest(lease_token.get_secret_value()),
+        )
+
+    def reconcile(self, envelope_id: UUID, *, effect_report: EffectReportState) -> None:
+        self._repository.reconcile_expired_envelope(
+            envelope_id,
+            effect_report=effect_report,
+        )

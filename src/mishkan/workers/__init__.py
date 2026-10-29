@@ -1,27 +1,66 @@
 """Distributed worker identity, enrollment, and execution contracts."""
 
+from mishkan.workers.coordination import WorkerCoordinationRepository
 from mishkan.workers.models import (
+    CapabilityObservation,
+    CapabilityRequirement,
     CertificateState,
+    EffectReportState,
     EnrollmentCredential,
     EnrollmentState,
+    ImmutableTaskEnvelope,
+    RemoteEnvelopeState,
+    TaskInputReference,
+    TaskPathScope,
+    TaskResourceLimits,
+    WorkerAvailability,
     WorkerCertificateBundle,
+    WorkerCompletion,
+    WorkerCompletionState,
+    WorkerCompletionSubmission,
     WorkerEnrollmentRequest,
+    WorkerHeartbeat,
+    WorkerHeartbeatRecord,
     WorkerIdentity,
+    WorkerLease,
+    WorkerLeaseGrant,
+    WorkerLeaseState,
+    WorkerResourceSnapshot,
     WorkerState,
 )
 from mishkan.workers.pki import WorkerCertificateAuthority
 from mishkan.workers.repository import WorkerIdentityRepository
-from mishkan.workers.service import WorkerEnrollmentService
+from mishkan.workers.service import WorkerCoordinationService, WorkerEnrollmentService
 
 __all__ = [
+    "CapabilityObservation",
+    "CapabilityRequirement",
     "CertificateState",
+    "EffectReportState",
     "EnrollmentCredential",
     "EnrollmentState",
+    "ImmutableTaskEnvelope",
+    "RemoteEnvelopeState",
+    "TaskInputReference",
+    "TaskPathScope",
+    "TaskResourceLimits",
+    "WorkerAvailability",
     "WorkerCertificateAuthority",
     "WorkerCertificateBundle",
+    "WorkerCompletion",
+    "WorkerCompletionState",
+    "WorkerCompletionSubmission",
+    "WorkerCoordinationRepository",
+    "WorkerCoordinationService",
     "WorkerEnrollmentRequest",
     "WorkerEnrollmentService",
+    "WorkerHeartbeat",
+    "WorkerHeartbeatRecord",
     "WorkerIdentity",
     "WorkerIdentityRepository",
+    "WorkerLease",
+    "WorkerLeaseGrant",
+    "WorkerLeaseState",
+    "WorkerResourceSnapshot",
     "WorkerState",
 ]

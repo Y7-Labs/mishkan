@@ -1023,6 +1023,86 @@ class WorkerCertificateRow(Base):
     revoked_at: Mapped[str | None] = mapped_column(String(40))
 
 
+class WorkerHeartbeatRow(Base):
+    __tablename__ = "worker_heartbeats"
+
+    worker_id: Mapped[str] = mapped_column(ForeignKey("worker_identities.id"), primary_key=True)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    advertisement_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    observed_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    expires_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class RemoteTaskEnvelopeRow(Base):
+    __tablename__ = "remote_task_envelopes"
+    __table_args__ = (
+        UniqueConstraint(
+            "task_row_id",
+            "task_attempt",
+            name="uq_remote_task_envelope_attempt",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), nullable=False)
+    task_row_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), nullable=False)
+    task_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    task_attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    worker_id: Mapped[str] = mapped_column(ForeignKey("worker_identities.id"), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    stateful_effects: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    deadline: Mapped[str] = mapped_column(String(40), nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class WorkerLeaseRow(Base):
+    __tablename__ = "worker_task_leases"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    envelope_id: Mapped[str] = mapped_column(
+        ForeignKey("remote_task_envelopes.id"), unique=True, nullable=False
+    )
+    worker_id: Mapped[str] = mapped_column(ForeignKey("worker_identities.id"), nullable=False)
+    token_digest: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    issued_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    expires_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    last_renewed_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    completed_at: Mapped[str | None] = mapped_column(String(40))
+
+
+class WorkerCompletionRow(Base):
+    __tablename__ = "worker_task_completions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    envelope_id: Mapped[str] = mapped_column(ForeignKey("remote_task_envelopes.id"), nullable=False)
+    lease_id: Mapped[str] = mapped_column(ForeignKey("worker_task_leases.id"), nullable=False)
+    worker_id: Mapped[str] = mapped_column(ForeignKey("worker_identities.id"), nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    received_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    accepted_at: Mapped[str | None] = mapped_column(String(40))
+    decided_at: Mapped[str | None] = mapped_column(String(40))
+    decision_reason: Mapped[str | None] = mapped_column(Text)
+
+
+class WorkerTaskAcceptanceRow(Base):
+    __tablename__ = "worker_task_acceptances"
+
+    task_row_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), primary_key=True)
+    completion_id: Mapped[str] = mapped_column(
+        ForeignKey("worker_task_completions.id"), unique=True, nullable=False
+    )
+    envelope_id: Mapped[str] = mapped_column(ForeignKey("remote_task_envelopes.id"), nullable=False)
+    accepted_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
 @dataclass(frozen=True, slots=True)
 class RunSnapshot:
     run_id: str
@@ -1458,7 +1538,11 @@ class LocalRunRepository:
                     task.status = TaskState.CANCELLED.value
                     task.revision += 1
                     task.updated_at = now
-                elif task.status in {TaskState.EXECUTING.value, TaskState.VALIDATING.value}:
+                elif task.status in {
+                    TaskState.LEASED.value,
+                    TaskState.EXECUTING.value,
+                    TaskState.VALIDATING.value,
+                }:
                     self._add_event(
                         session,
                         run_id,
@@ -1466,7 +1550,12 @@ class LocalRunRepository:
                         {"task_id": task.task_key},
                     )
             if not any(
-                task.status in {TaskState.EXECUTING.value, TaskState.VALIDATING.value}
+                task.status
+                in {
+                    TaskState.LEASED.value,
+                    TaskState.EXECUTING.value,
+                    TaskState.VALIDATING.value,
+                }
                 for task in tasks
             ):
                 run.status = RunState.CANCELLED.value
@@ -1671,6 +1760,7 @@ class LocalRunRepository:
                 if task.status in {
                     TaskState.PENDING.value,
                     TaskState.ELIGIBLE.value,
+                    TaskState.LEASED.value,
                     TaskState.EXECUTING.value,
                     TaskState.VALIDATING.value,
                 }:

@@ -226,10 +226,16 @@ from mishkan.web.models import (
     SearchResponse,
 )
 from mishkan.workers.models import (
+    ImmutableTaskEnvelope,
     WorkerCertificateBundle,
     WorkerCertificateRotationRequest,
+    WorkerCompletion,
+    WorkerCompletionSubmission,
     WorkerEnrollmentRequest,
+    WorkerHeartbeat,
+    WorkerHeartbeatRecord,
     WorkerIdentity,
+    WorkerLeaseGrant,
 )
 
 SCHEMAS: dict[str, type[BaseModel]] = {
@@ -256,8 +262,14 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "config-v1.schema.json": MishkanConfig,
     "worker-certificate-bundle-v1.schema.json": WorkerCertificateBundle,
     "worker-certificate-rotation-request-v1.schema.json": WorkerCertificateRotationRequest,
+    "worker-completion-submission-v1.schema.json": WorkerCompletionSubmission,
+    "worker-completion-v1.schema.json": WorkerCompletion,
     "worker-enrollment-request-v1.schema.json": WorkerEnrollmentRequest,
+    "worker-heartbeat-record-v1.schema.json": WorkerHeartbeatRecord,
+    "worker-heartbeat-v1.schema.json": WorkerHeartbeat,
     "worker-identity-v1.schema.json": WorkerIdentity,
+    "worker-lease-grant-v1.schema.json": WorkerLeaseGrant,
+    "worker-task-envelope-v1.schema.json": ImmutableTaskEnvelope,
     "prospective-run-request-v1.schema.json": ProspectiveRunRequest,
     "repository-establishment-request-v1.schema.json": RepositoryEstablishmentRequest,
     "confirmed-engineer-fact-v1.schema.json": ConfirmedEngineerFact,
