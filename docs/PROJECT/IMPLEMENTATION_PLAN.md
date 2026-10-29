@@ -1,9 +1,9 @@
 # MISHKAN Implementation and Acceptance Plan
 
-**Status:** Accepted by D-041 on 2026-08-29
-**Version:** 1.6
-**Derived from:** PRD 1.4, SRS 1.6, Contract 1.4, Responsibility Map 1.2, System Model 1.3, and
-Architecture 1.3 accepted by D-032–D-035 and D-037
+**Status:** Accepted through D-051 on 2026-10-29
+**Version:** 1.7
+**Derived from:** PRD 1.5, SRS 1.7, Contract 1.5, Responsibility Map 1.3, System Model 1.4, and
+Architecture 1.4 accepted through D-051
 
 ## 1. Purpose and gate authority
 
@@ -49,6 +49,9 @@ boundary, or later increment gates.
     derived observability and evaluation destination; it is disabled by default, receives only
     policy-authorized sanitized data, and never owns run state, acceptance, prompts, skills, or
     recovery.
+13. Mission Crew effectiveness is multidimensional and contextual. The system uses the smallest
+    sufficient production shape, preserves epistemically safe negative evidence, and never creates
+    a universal composite score, leaderboard, hidden ranking matrix, or automatic profile penalty.
 
 ## 3. Target repository boundaries
 
@@ -417,6 +420,41 @@ optional mission template, or installed engine. The cross-increment chain is the
 `MissionEnvironmentPlan`, its resolved `EnvironmentBinding`, and referenced artifacts, change sets,
 adapter evidence, and plan dependencies.
 
+#### I06-HPT — High-performance organization and Mission Crews
+
+**Runnable result:** A mission selects the smallest sufficient production shape, records a
+versioned collaboration plan, exposes deterministic team signals, receives independent milestone
+health evaluations, performs only bounded in-plan adaptations automatically, and closes with an
+immutable retrospective whose proposals cannot promote themselves.
+
+**Build scope:**
+
+- add strict public contracts for `MissionCollaborationPlan`, `TeamHealthEvaluation`,
+  `CrewAdaptationDecision`, and `MissionRetrospective`;
+- add a public `team_effectiveness` configuration section for cadence, evidence bounds, history
+  freshness, thresholds, resource budgets, and permitted bounded adaptations;
+- require CrewAI-authored attributable composition proposals and alternatives, deterministic
+  eligibility gates, and joint PM/CTO confirmation before multi-agent production;
+- provide bounded shared Context Packs and complete handoff evidence;
+- collect cheap deterministic signals for flow, rework, overlap, handoffs, drift, workload, risk,
+  and resource use without a synchronous model call in task completion;
+- run independent milestone evaluations and settle evaluator failure as `uncertain`;
+- persist collaboration plans, evaluations, adaptation decisions, and retrospective metadata;
+- derive collaboration history from accepted missions instead of creating a second registry;
+- expose mission collaboration, health, adaptation, and retrospective commands and bounded query,
+  snapshot, and SSE projections through the existing daemon authority.
+
+**Primary trace:** ORG-017–019, MSN-017–022, RUN-013.
+
+**Gate:** simple work selects `single_owner`; cross-disciplinary work justifies an explicit
+interaction graph; comparable evidence may prefer a prior combination while changed context can
+displace it; dissent and uncertainty reach independent evaluation; broken handoffs, duplicate work,
+and drift are detected; bounded adaptation cannot enlarge authority; material change follows
+PM/CTO governance; local and distributed execution yield the same lineage; retrospective and team
+aggregates cannot silently change individual competence; evaluator failure yields `uncertain`.
+Branch coverage for the extension is at least 80 percent and the complete quality and real CrewAI
+acceptance gates pass.
+
 #### Mission-environment acceptance scenario matrix
 
 | Scenario | Required mission decision | Required evidence before dependent work |
@@ -569,7 +607,7 @@ to every affected gate.
 | I03 | SYS-006, RUN-004–005, RUN-007–012, EDT-001–008, EXE-004–008, ART-001–008, OBS-001–008, NFR-003–004, TC-009 |
 | I04 | WEB-001–007, BRW-001–008, MCP-001–009, TC-008 |
 | I05 | CTX-001–008, SKL-001–025, ENG-001–013 |
-| I06 | PRJ-008–010, PLN-012–021, ORG-001–016, MSN-001–016 |
+| I06 | PRJ-008–010, PLN-012–021, ORG-001–019, MSN-001–022, RUN-013 |
 | I07 | KNW-001–006 |
 | I08 | AUT-001–007 |
 | I09 | DST-001–010 |
@@ -585,6 +623,9 @@ to every affected gate.
 5. D-036 accepts Implementation Plan 1.4 and explicitly authorizes resumption of I02.
 6. D-037 accepts the Model 1.3, Architecture 1.3, and Implementation Plan 1.5 mission-environment
    detail amendment while preserving D-036's I02 authority and the later increment gates.
+7. D-051 accepts PRD 1.5, SRS 1.7, Contract 1.5, Responsibility Map 1.3, System Model 1.4,
+   Architecture 1.4, and this Implementation Plan 1.7 amendment and authorizes I06-HPT without
+   changing the 59-identity roster or renumbering I10 and I11.
 
 All six decisions were accepted in order on 2026-08-25. D-036 therefore resumes I02 only; it does
 not accept I02 evidence in advance or authorize later increments outside their declared gates.

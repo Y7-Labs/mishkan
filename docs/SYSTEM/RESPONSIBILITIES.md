@@ -1,13 +1,13 @@
 # MISHKAN Requirement-to-Responsibility Map
 
-**Status:** Accepted by D-034 on 2026-08-25
-**Version:** 1.2
+**Status:** Accepted by D-034; amended by D-051 on 2026-10-29
+**Version:** 1.3
 **Sequence:** SWE-BASICS-BEFORE-CODE 04
-**Derived from:** PRD 1.4, SRS 1.6, and System Contract 1.4 accepted by D-032–D-033
+**Derived from:** PRD 1.5, SRS 1.7, and System Contract 1.5 accepted by D-051
 
 ## 1. Purpose
 
-This accepted map assigns every SRS 1.6 guarantee to one primary responsibility before
+This accepted map assigns every SRS 1.7 guarantee to one primary responsibility before
 components are designed. A responsibility describes logic and state ownership. It is not yet a
 Python module, service, daemon, database, or deployment unit.
 
@@ -222,10 +222,14 @@ enforced by RSP-011 rather than expanded into synthetic per-command tools.
 Turn mission origins into PM/CTO-confirmed Mission Briefs; compose and revise temporary Mission
 Crews; preserve mission lifecycle and durable channel classes; distinguish messages, commands,
 decisions, and escalations; validate CEO interventions and scoped pauses; and require an explicit
-execution-environment intent and dependency state for environment-dependent mission work.
+execution-environment intent and dependency state for environment-dependent mission work. Establish
+the smallest sufficient production shape and versioned collaboration plan; own deterministic team
+signals, bounded adaptation, collaboration-history projection, and governed retrospectives.
 
-**Owns:** Mission Brief, environment intent, crew revision, accountable assignment, mission state,
-conversation and escalation records, intervention validation, and PM/CTO confirmation evidence.
+**Owns:** Mission Brief, environment intent, crew and collaboration-plan revision, accountable
+assignment, mission state, team-signal record, adaptation decision, retrospective metadata,
+collaboration-history projection, conversation and escalation records, intervention validation,
+and PM/CTO confirmation evidence.
 
 ### RSP-023 — Preserve artifacts and working references
 
@@ -263,7 +267,8 @@ degradation record.
 
 Attribute agent knowledge, skill associations, tool mastery, and demonstrated competence to scoped
 execution and evaluation evidence; enforce independence and authority immutability; promote only to
-justified scope; and retain contradictory, stale, and failure evidence.
+justified scope; retain contradictory, stale, and failure evidence; and prohibit aggregate team
+health or retrospective findings from silently promoting or penalizing an individual profile.
 
 **Owns:** profile-evidence record, competence state, learning scope, promotion decision request,
 freshness, contradiction, and reversible profile-version lineage.
@@ -281,8 +286,8 @@ Each range is inclusive. No requirement appears in more than one row.
 | RSP-005 | PLN-001–004, PLN-009–021 |
 | RSP-006 | PLN-005–008, SAF-003–006 |
 | RSP-007 | ORG-001–004, ORG-010–014 |
-| RSP-008 | ORG-009, RUN-001–005, RUN-007, RUN-009, RUN-011 |
-| RSP-009 | ORG-005–008 |
+| RSP-008 | ORG-009, RUN-001–005, RUN-007, RUN-009, RUN-011, RUN-013 |
+| RSP-009 | ORG-005–008, ORG-017 |
 | RSP-010 | RUN-006, RUN-008, RUN-010 |
 | RSP-011 | SAF-001–002, SAF-007, SAF-011, SAF-013, TOL-012–022, TOL-026, FIL-001–007, EDT-001–008, EXE-001–008, WEB-001–007, BRW-001–008 |
 | RSP-012 | SAF-008–010, SAF-012, OBS-008 |
@@ -295,11 +300,11 @@ Each range is inclusive. No requirement appears in more than one row.
 | RSP-019 | TC-001–009 |
 | RSP-020 | SKL-001–005, SKL-009–015 |
 | RSP-021 | TOL-001–011, TOL-023–025, TOL-027 |
-| RSP-022 | MSN-001–016 |
+| RSP-022 | ORG-018, MSN-001–022 |
 | RSP-023 | ART-001–008 |
 | RSP-024 | MCP-001–009 |
 | RSP-025 | CTX-004–008, ENG-001–013 |
-| RSP-026 | ORG-015–016 |
+| RSP-026 | ORG-015–016, ORG-019 |
 
 ## 5. Error ownership matrix
 
@@ -337,7 +342,7 @@ Each range is inclusive. No requirement appears in more than one row.
 | RSP-005 | CTR-002, CTR-004, INV-007 |
 | RSP-006 | CTR-003, INV-002, INV-004–006 |
 | RSP-008 | CTR-006, INV-009–010, INV-018 |
-| RSP-009 | CTR-008, INV-014 |
+| RSP-009 | CTR-008, INV-014, INV-044–045 |
 | RSP-010 | CTR-005, INV-011–013 |
 | RSP-011 | INV-003, INV-015, INV-017, INV-028–030 |
 | RSP-012 | CTR-007, INV-016 |
@@ -348,11 +353,11 @@ Each range is inclusive. No requirement appears in more than one row.
 | RSP-017 | CTR-012, INV-023 |
 | RSP-020 | CTR-013, INV-024 |
 | RSP-021 | CTR-014, INV-027, INV-031 |
-| RSP-022 | CTR-015–016, INV-032–034 |
+| RSP-022 | CTR-015–016, CTR-021, INV-032–034, INV-043, INV-046 |
 | RSP-023 | CTR-017, INV-036–037 |
 | RSP-024 | CTR-019, INV-040–041 |
 | RSP-025 | CTR-020, INV-038–039, INV-042 |
-| RSP-026 | CTR-018, INV-035 |
+| RSP-026 | CTR-018, INV-035, INV-047 |
 
 `INV-003` is primarily enforced at the capability boundary by RSP-011; RSP-006 supplies the
 authorization decision but does not enforce its own decision.

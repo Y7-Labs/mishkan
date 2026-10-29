@@ -47,9 +47,14 @@ I09 is accepted by D-050 at `00f8ce6` after the local deterministic and branch-c
 the eight-job Linux/macOS Python 3.11–3.13 matrix passed. The accepted boundary includes explicit
 PostgreSQL/S3 distributed mode, individually revocable mTLS workers, immutable CrewAI task
 envelopes, capability-aware placement, renewable leases, loss recovery, durable artifact/result
-delivery, and at-most-once accepted completion. I09 may be promoted topic-to-`develop`; I10 and
-later increments remain unauthorized until an explicit engineer decision after that integration
-gate. The rejected
+delivery, and at-most-once accepted completion. I09 is integrated into `develop` at `03a78e6`.
+D-051 accepts the PRD 1.5, SRS 1.7, Contract 1.5, Responsibilities 1.3, System Model 1.4,
+Architecture 1.4, and Implementation Plan 1.7 amendment and authorizes I06-HPT on
+`feat/i06-high-performance-teams`. The extension adds smallest-sufficient Mission Crews,
+collaboration plans, epistemic safety, multidimensional effectiveness evidence, contextual
+history, independent milestone evaluation, bounded adaptation, and retrospectives while preserving
+the 59 identities and CrewAI boundary. D-052 is required to close this extension gate. I10 and
+later increments remain unauthorized until an explicit engineer decision. The rejected
 universal workflow, mandatory outcome catalogue, capability-family matrix, static role/tool matrix,
 competing runtime, and private operational deny-list must not return.
 
