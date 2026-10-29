@@ -1130,6 +1130,29 @@ class WorkerCoordinationRepository:
                 raise MishkanError(ErrorCode.WORKER, "worker completion does not exist")
             return self._completion(row)
 
+    def authorize_input_artifact(self, worker_id: UUID, artifact_id: UUID) -> None:
+        """Prove that an active lease explicitly references one immutable input artifact."""
+
+        with Session(self._engine) as session:
+            self._active_worker(session, worker_id, lock=False)
+            envelope_rows = session.scalars(
+                select(RemoteTaskEnvelopeRow)
+                .join(WorkerLeaseRow, WorkerLeaseRow.envelope_id == RemoteTaskEnvelopeRow.id)
+                .where(
+                    WorkerLeaseRow.worker_id == str(worker_id),
+                    WorkerLeaseRow.state == WorkerLeaseState.ACTIVE.value,
+                    WorkerLeaseRow.expires_at > utc_now().isoformat(),
+                )
+            ).all()
+            for row in envelope_rows:
+                envelope = self._envelope(row)
+                if artifact_id in {item.artifact_id for item in envelope.inputs}:
+                    return
+        raise MishkanError(
+            ErrorCode.AUTHORITY_NOT_GRANTED,
+            "worker has no active lease for the requested input artifact",
+        )
+
     @staticmethod
     def _active_worker(session: Session, worker_id: UUID, *, lock: bool) -> WorkerIdentityRow:
         statement = select(WorkerIdentityRow).where(WorkerIdentityRow.id == str(worker_id))

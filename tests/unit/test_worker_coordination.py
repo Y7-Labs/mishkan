@@ -33,6 +33,7 @@ from mishkan.workers import (
     ImmutableTaskEnvelope,
     RemotePlacementRequest,
     RemotePlacementState,
+    TaskInputReference,
     TaskPathScope,
     TaskResourceLimits,
     WorkerAvailability,
@@ -498,6 +499,32 @@ def test_lease_secret_is_not_serialized_by_public_grant(tmp_path: Path) -> None:
     assert secret not in grant.model_dump_json()
     with pytest.raises(MishkanError):
         service.begin(worker_id, grant.lease.id, SecretStr("wrong-secret" * 5))
+
+
+def test_worker_reads_only_artifacts_referenced_by_an_active_lease(tmp_path: Path) -> None:
+    _database, _runs, coordination, service, run_id, task_row_id, worker_id = _setup(tmp_path)
+    artifact_id = uuid4()
+    envelope = _envelope(run_id, task_row_id, worker_id).model_copy(
+        update={
+            "inputs": (
+                TaskInputReference(
+                    name="context",
+                    artifact_id=artifact_id,
+                    digest=f"sha256:{'a' * 64}",
+                ),
+            )
+        }
+    )
+    grant = service.issue(envelope)
+
+    service.authorize_input_artifact(worker_id, artifact_id)
+    with pytest.raises(MishkanError) as unrelated:
+        service.authorize_input_artifact(worker_id, uuid4())
+    assert unrelated.value.envelope.code is ErrorCode.AUTHORITY_NOT_GRANTED
+
+    coordination.expire_leases(now=grant.lease.expires_at + timedelta(seconds=1))
+    with pytest.raises(MishkanError):
+        service.authorize_input_artifact(worker_id, artifact_id)
 
 
 def test_heartbeat_refuses_invalid_bounds_unknown_leases_and_stale_workers(

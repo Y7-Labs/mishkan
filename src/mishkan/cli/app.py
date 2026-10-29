@@ -154,6 +154,20 @@ def revoke_worker(
     _emit(identity.model_dump(mode="json"), as_json=_state(ctx).json_output)
 
 
+@worker_app.command("place")
+def place_worker_task(
+    ctx: typer.Context,
+    request_file: Annotated[Path, typer.Option("--request")],
+) -> None:
+    """Queue one governed immutable remote-task placement."""
+    from mishkan.workers import RemotePlacementRequest
+
+    request = _read_contract(request_file, RemotePlacementRequest, "--request")
+    with _daemon_client(ctx) as client:
+        placement = client.workers.place(request)
+    _emit(placement.model_dump(mode="json"), as_json=_state(ctx).json_output)
+
+
 @schedule_app.command("create")
 def create_schedule(
     ctx: typer.Context,

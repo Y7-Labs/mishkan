@@ -208,3 +208,6 @@ class WorkerCoordinationService:
             envelope_id,
             effect_report=effect_report,
         )
+
+    def authorize_input_artifact(self, worker_id: UUID, artifact_id: UUID) -> None:
+        self._repository.authorize_input_artifact(worker_id, artifact_id)

@@ -1,0 +1,62 @@
+{
+  "$defs": {
+    "EffectReportState": {
+      "enum": [
+        "not_applicable",
+        "proven",
+        "uncertain"
+      ],
+      "title": "EffectReportState",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Executor-produced material; mishkand still validates and accepts it separately.",
+  "properties": {
+    "artifact_ids": {
+      "default": [],
+      "items": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "title": "Artifact Ids",
+      "type": "array"
+    },
+    "effect_evidence_artifact_ids": {
+      "default": [],
+      "items": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "title": "Effect Evidence Artifact Ids",
+      "type": "array"
+    },
+    "effect_report": {
+      "$ref": "#/$defs/EffectReportState",
+      "default": "not_applicable"
+    },
+    "result": {
+      "additionalProperties": true,
+      "title": "Result",
+      "type": "object"
+    },
+    "unified_patch_artifact_id": {
+      "anyOf": [
+        {
+          "format": "uuid",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Unified Patch Artifact Id"
+    }
+  },
+  "required": [
+    "result"
+  ],
+  "title": "WorkerExecutionResult",
+  "type": "object"
+}

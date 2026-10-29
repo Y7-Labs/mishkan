@@ -144,6 +144,37 @@ class WorkerResourceSnapshot(WorkerValueModel):
         return self
 
 
+class WorkerContextBinding(WorkerValueModel):
+    repository_id: str = Field(min_length=12, max_length=256)
+    repository_revision: str = Field(min_length=7, max_length=128)
+    execution_context_revision: str = Field(min_length=7, max_length=128)
+
+
+class WorkerRuntimeProfile(WorkerValueModel):
+    """Public process behavior and observed capabilities for one worker location."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    model_route: str = Field(min_length=1, max_length=128)
+    capabilities: tuple[CapabilityObservation, ...]
+    context_bindings: tuple[WorkerContextBinding, ...] = ()
+    max_concurrency: int = Field(default=1, ge=1, le=10_000)
+    max_input_bytes: int = Field(default=16_777_216, ge=1, le=1_073_741_824)
+    heartbeat_interval_seconds: float = Field(default=10, gt=0, le=300)
+    renewal_interval_seconds: float = Field(default=20, gt=0, le=3_600)
+    idle_poll_seconds: float = Field(default=2, gt=0, le=300)
+    request_timeout_seconds: float = Field(default=120, gt=0, le=86_400)
+
+    @model_validator(mode="after")
+    def worker_profile_is_unambiguous(self) -> Self:
+        capability_ids = [item.capability_id for item in self.capabilities]
+        if len(capability_ids) != len(set(capability_ids)):
+            raise ValueError("worker profile capabilities must have unique identities")
+        repository_ids = [item.repository_id for item in self.context_bindings]
+        if len(repository_ids) != len(set(repository_ids)):
+            raise ValueError("worker context bindings must have unique repositories")
+        return self
+
+
 class WorkerHeartbeat(DomainRecord):
     worker_id: UUID
     sequence: int = Field(ge=1)
@@ -377,6 +408,23 @@ class WorkerCompletionSubmission(DomainRecord):
     @property
     def fingerprint(self) -> str:
         return canonical_fingerprint(self.model_dump(mode="json", exclude={"id", "created_at"}))
+
+
+class WorkerExecutionResult(WorkerValueModel):
+    """Executor-produced material; mishkand still validates and accepts it separately."""
+
+    result: dict[str, Any]
+    artifact_ids: tuple[UUID, ...] = ()
+    unified_patch_artifact_id: UUID | None = None
+    effect_evidence_artifact_ids: tuple[UUID, ...] = ()
+    effect_report: EffectReportState = EffectReportState.NOT_APPLICABLE
+
+    @model_validator(mode="after")
+    def execution_artifacts_are_unique(self) -> Self:
+        references = (*self.artifact_ids, *self.effect_evidence_artifact_ids)
+        if len(references) != len(set(references)):
+            raise ValueError("worker execution artifact references must be unique")
+        return self
 
 
 class WorkerCompletion(DomainRecord):

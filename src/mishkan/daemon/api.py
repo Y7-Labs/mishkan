@@ -1711,6 +1711,39 @@ def create_app(
             SecretStr(lease_token),
         )
 
+    @app.get("/v1/workers/artifacts/{artifact_id}/content")
+    async def worker_input_artifact(
+        artifact_id: UUID,
+        request: Request,
+    ) -> StreamingResponse:
+        if worker_coordination is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker coordination is not configured",
+            )
+        identity, _serial = await _thread_call(authenticated_worker, request)
+        await _thread_call(
+            worker_coordination.authorize_input_artifact,
+            identity.id,
+            artifact_id,
+        )
+        manifest = await _thread_call(artifacts.manifest, f"artifact:{artifact_id}")
+
+        def body() -> Iterator[bytes]:
+            yield from artifacts.iter_bytes(
+                manifest.reference,
+                chunk_size=artifact_config.chunk_bytes,
+            )
+
+        return StreamingResponse(
+            body(),
+            media_type=manifest.detected_media_type or manifest.declared_media_type,
+            headers={
+                "Content-Length": str(manifest.size_bytes),
+                "X-Mishkan-Artifact-Digest": manifest.digest,
+            },
+        )
+
     @app.get("/v1/workers", response_model=None)
     async def worker_list(
         _principal: TokenRecord = authenticated,

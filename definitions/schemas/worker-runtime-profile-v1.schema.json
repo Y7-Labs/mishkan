@@ -1,0 +1,150 @@
+{
+  "$defs": {
+    "CapabilityObservation": {
+      "additionalProperties": false,
+      "description": "One worker-observed capability; observation never grants authority.",
+      "properties": {
+        "attributes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "maxProperties": 64,
+          "title": "Attributes",
+          "type": "object"
+        },
+        "capability_id": {
+          "pattern": "^[a-z][a-z0-9_.-]{2,127}$",
+          "title": "Capability Id",
+          "type": "string"
+        },
+        "fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Fingerprint",
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "capability_id",
+        "version",
+        "fingerprint"
+      ],
+      "title": "CapabilityObservation",
+      "type": "object"
+    },
+    "WorkerContextBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "execution_context_revision": {
+          "maxLength": 128,
+          "minLength": 7,
+          "title": "Execution Context Revision",
+          "type": "string"
+        },
+        "repository_id": {
+          "maxLength": 256,
+          "minLength": 12,
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "repository_revision": {
+          "maxLength": 128,
+          "minLength": 7,
+          "title": "Repository Revision",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repository_id",
+        "repository_revision",
+        "execution_context_revision"
+      ],
+      "title": "WorkerContextBinding",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Public process behavior and observed capabilities for one worker location.",
+  "properties": {
+    "capabilities": {
+      "items": {
+        "$ref": "#/$defs/CapabilityObservation"
+      },
+      "title": "Capabilities",
+      "type": "array"
+    },
+    "context_bindings": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/WorkerContextBinding"
+      },
+      "title": "Context Bindings",
+      "type": "array"
+    },
+    "heartbeat_interval_seconds": {
+      "default": 10,
+      "exclusiveMinimum": 0,
+      "maximum": 300,
+      "title": "Heartbeat Interval Seconds",
+      "type": "number"
+    },
+    "idle_poll_seconds": {
+      "default": 2,
+      "exclusiveMinimum": 0,
+      "maximum": 300,
+      "title": "Idle Poll Seconds",
+      "type": "number"
+    },
+    "max_concurrency": {
+      "default": 1,
+      "maximum": 10000,
+      "minimum": 1,
+      "title": "Max Concurrency",
+      "type": "integer"
+    },
+    "max_input_bytes": {
+      "default": 16777216,
+      "maximum": 1073741824,
+      "minimum": 1,
+      "title": "Max Input Bytes",
+      "type": "integer"
+    },
+    "model_route": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Model Route",
+      "type": "string"
+    },
+    "renewal_interval_seconds": {
+      "default": 20,
+      "exclusiveMinimum": 0,
+      "maximum": 3600,
+      "title": "Renewal Interval Seconds",
+      "type": "number"
+    },
+    "request_timeout_seconds": {
+      "default": 120,
+      "exclusiveMinimum": 0,
+      "maximum": 86400,
+      "title": "Request Timeout Seconds",
+      "type": "number"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "model_route",
+    "capabilities"
+  ],
+  "title": "WorkerRuntimeProfile",
+  "type": "object"
+}

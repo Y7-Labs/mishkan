@@ -1,5 +1,6 @@
 """Distributed worker identity, enrollment, and execution contracts."""
 
+from mishkan.workers.client import WorkerHttpClient
 from mishkan.workers.coordination import WorkerCoordinationRepository
 from mishkan.workers.models import (
     CapabilityObservation,
@@ -22,7 +23,9 @@ from mishkan.workers.models import (
     WorkerCompletion,
     WorkerCompletionState,
     WorkerCompletionSubmission,
+    WorkerContextBinding,
     WorkerEnrollmentRequest,
+    WorkerExecutionResult,
     WorkerHeartbeat,
     WorkerHeartbeatRecord,
     WorkerIdentity,
@@ -30,12 +33,14 @@ from mishkan.workers.models import (
     WorkerLeaseGrant,
     WorkerLeaseState,
     WorkerResourceSnapshot,
+    WorkerRuntimeProfile,
     WorkerState,
     WorkerTaskClaim,
 )
 from mishkan.workers.pki import WorkerCertificateAuthority
 from mishkan.workers.repository import WorkerIdentityRepository
 from mishkan.workers.service import WorkerCoordinationService, WorkerEnrollmentService
+from mishkan.workers.state import WorkerCredentialPaths, WorkerCredentialStore, WorkerLocalIdentity
 
 __all__ = [
     "CapabilityObservation",
@@ -59,18 +64,25 @@ __all__ = [
     "WorkerCompletion",
     "WorkerCompletionState",
     "WorkerCompletionSubmission",
+    "WorkerContextBinding",
     "WorkerCoordinationRepository",
     "WorkerCoordinationService",
+    "WorkerCredentialPaths",
+    "WorkerCredentialStore",
     "WorkerEnrollmentRequest",
     "WorkerEnrollmentService",
+    "WorkerExecutionResult",
     "WorkerHeartbeat",
     "WorkerHeartbeatRecord",
+    "WorkerHttpClient",
     "WorkerIdentity",
     "WorkerIdentityRepository",
     "WorkerLease",
     "WorkerLeaseGrant",
     "WorkerLeaseState",
+    "WorkerLocalIdentity",
     "WorkerResourceSnapshot",
+    "WorkerRuntimeProfile",
     "WorkerState",
     "WorkerTaskClaim",
 ]

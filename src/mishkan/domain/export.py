@@ -235,10 +235,12 @@ from mishkan.workers.models import (
     WorkerCompletion,
     WorkerCompletionSubmission,
     WorkerEnrollmentRequest,
+    WorkerExecutionResult,
     WorkerHeartbeat,
     WorkerHeartbeatRecord,
     WorkerIdentity,
     WorkerLeaseGrant,
+    WorkerRuntimeProfile,
     WorkerTaskClaim,
 )
 
@@ -269,6 +271,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "worker-claim-request-v1.schema.json": WorkerClaimRequest,
     "worker-completion-submission-v1.schema.json": WorkerCompletionSubmission,
     "worker-completion-v1.schema.json": WorkerCompletion,
+    "worker-execution-result-v1.schema.json": WorkerExecutionResult,
     "worker-enrollment-request-v1.schema.json": WorkerEnrollmentRequest,
     "worker-heartbeat-record-v1.schema.json": WorkerHeartbeatRecord,
     "worker-heartbeat-v1.schema.json": WorkerHeartbeat,
@@ -276,6 +279,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "worker-lease-grant-v1.schema.json": WorkerLeaseGrant,
     "worker-remote-placement-request-v1.schema.json": RemotePlacementRequest,
     "worker-remote-placement-v1.schema.json": RemotePlacement,
+    "worker-runtime-profile-v1.schema.json": WorkerRuntimeProfile,
     "worker-task-claim-v1.schema.json": WorkerTaskClaim,
     "worker-task-envelope-v1.schema.json": ImmutableTaskEnvelope,
     "prospective-run-request-v1.schema.json": ProspectiveRunRequest,

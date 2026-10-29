@@ -151,7 +151,12 @@ from mishkan.telemetry.models import (
     TelemetryEvaluationImportResult,
     TelemetryStatus,
 )
-from mishkan.workers.models import EnrollmentCredential, WorkerIdentity
+from mishkan.workers.models import (
+    EnrollmentCredential,
+    RemotePlacement,
+    RemotePlacementRequest,
+    WorkerIdentity,
+)
 
 
 class Mishkan:
@@ -1778,6 +1783,18 @@ class WorkerAdminClient:
             )
         )
         return WorkerIdentity.model_validate(result.payload)
+
+    def place(self, request: RemotePlacementRequest) -> RemotePlacement:
+        result = self._client.command(
+            ApplicationCommand(
+                command_type="worker.task.place",
+                actor_id=self._client.principal_id,
+                target_type="worker_task_placement",
+                target_id=str(request.id),
+                payload={"request": request.model_dump(mode="json")},
+            )
+        )
+        return RemotePlacement.model_validate(result.payload)
 
 
 class ScheduleClient:
