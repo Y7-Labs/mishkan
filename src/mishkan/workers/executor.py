@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict
 from mishkan.config.models import MishkanConfig
 from mishkan.crewai.routing import CrewAIModelRouter
 from mishkan.domain.errors import ErrorCode, MishkanError
+from mishkan.domain.time import utc_now
 from mishkan.planning.models import InitializationResult, PlanTask
 from mishkan.workers.models import (
     ImmutableTaskEnvelope,
@@ -88,8 +89,15 @@ a bounded summary, exact cited paths, and factual findings. Do not plan other wo
 authorize an effect, claim acceptance, or invent evidence. The coordinator independently validates
 this result and decides acceptance. No tools are exposed by this execution boundary.
 """.strip()
+        remaining_seconds = int((envelope.deadline - utc_now()).total_seconds())
+        execution_timeout = min(envelope.resources.timeout_seconds, remaining_seconds)
+        if execution_timeout < 1:
+            raise MishkanError(ErrorCode.WORKER, "remote task execution deadline has expired")
         failures: list[str] = []
-        for llm in self._models.candidates_for(self._model_route):
+        for llm in self._models.candidates_for(
+            self._model_route,
+            timeout_seconds=execution_timeout,
+        ):
             try:
                 agent = Agent(
                     role=contract.assigned_role,
@@ -106,6 +114,7 @@ this result and decides acceptance. No tools are exposed by this execution bound
                     allow_code_execution=False,
                     max_iter=self._config.crewai.max_agent_iterations,
                     max_retry_limit=0,
+                    max_execution_time=execution_timeout,
                     verbose=False,
                 )
                 task = Task(

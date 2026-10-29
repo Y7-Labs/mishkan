@@ -100,7 +100,11 @@ def test_remote_executor_uses_one_crewai_crew_without_tools_or_delegation(
         model_route="simple",
         max_input_bytes=1024,
     )
-    monkeypatch.setattr(executor._models, "candidates_for", lambda _route: iter((object(),)))
+    monkeypatch.setattr(
+        executor._models,
+        "candidates_for",
+        lambda _route, **_kwargs: iter((object(),)),
+    )
 
     result = executor.execute(_envelope(), {})
 
@@ -115,6 +119,7 @@ def test_remote_executor_uses_one_crewai_crew_without_tools_or_delegation(
     assert agent["tools"] == []
     assert agent["allow_delegation"] is False
     assert agent["allow_code_execution"] is False
+    assert agent["max_execution_time"] == 60
     crew = observed["crew"]
     assert isinstance(crew, dict)
     assert len(crew["agents"]) == 1
@@ -139,7 +144,11 @@ def test_remote_executor_enforces_immutable_result_bound(
         model_route="simple",
         max_input_bytes=1024,
     )
-    monkeypatch.setattr(executor._models, "candidates_for", lambda _route: iter((object(),)))
+    monkeypatch.setattr(
+        executor._models,
+        "candidates_for",
+        lambda _route, **_kwargs: iter((object(),)),
+    )
 
     with pytest.raises(MishkanError, match="all configured CrewAI worker model candidates failed"):
         executor.execute(_envelope(max_result_bytes=1), {})

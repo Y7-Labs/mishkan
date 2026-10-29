@@ -850,6 +850,19 @@ def test_lease_renewal_is_revision_guarded_and_begin_is_idempotent(tmp_path: Pat
     assert stale.value.envelope.code is ErrorCode.REVISION_MISMATCH
 
 
+def test_remote_lease_deadline_is_bounded_by_task_timeout(tmp_path: Path) -> None:
+    _database, _runs, _coordination, service, run_id, task_row_id, worker_id = _setup(tmp_path)
+    envelope = _envelope(run_id, task_row_id, worker_id)
+    before = utc_now()
+
+    grant = service.issue(envelope)
+
+    assert grant.envelope.deadline <= before + timedelta(
+        seconds=envelope.resources.timeout_seconds + 1
+    )
+    assert grant.lease.expires_at <= grant.envelope.deadline
+
+
 @pytest.mark.parametrize(
     "change",
     [

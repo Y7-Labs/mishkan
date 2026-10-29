@@ -200,6 +200,14 @@ class WorkerCoordinationService:
         return self._repository.claim_next(worker_id, request)
 
     def issue(self, envelope: ImmutableTaskEnvelope) -> WorkerLeaseGrant:
+        envelope = envelope.model_copy(
+            update={
+                "deadline": min(
+                    envelope.deadline,
+                    utc_now() + timedelta(seconds=envelope.resources.timeout_seconds),
+                )
+            }
+        )
         secret = secrets.token_urlsafe(32)
         lease = self._repository.issue_lease(
             envelope,

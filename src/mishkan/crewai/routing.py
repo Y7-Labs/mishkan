@@ -20,7 +20,12 @@ class CrewAIModelRouter:
         self._config = config
         self._credentials = credential_resolver or CredentialPoolResolver()
 
-    def candidates_for(self, route_name: str) -> Iterator[LLM]:
+    def candidates_for(
+        self,
+        route_name: str,
+        *,
+        timeout_seconds: int | None = None,
+    ) -> Iterator[LLM]:
         route = self._config.model_routes.get(route_name)
         if route is None:
             raise MishkanError(
@@ -31,14 +36,23 @@ class CrewAIModelRouter:
         for candidate in route.candidates:
             provider = self._config.providers[candidate.provider]
             for credential in self._credentials.resolve(provider.credential_pool):
-                yield self._materialize(candidate, provider, credential)
+                yield self._materialize(
+                    candidate,
+                    provider,
+                    credential,
+                    timeout_seconds=timeout_seconds,
+                )
 
     def _materialize(
         self,
         candidate: ModelCandidate,
         provider: ProviderConfig,
         credential: str | None,
+        *,
+        timeout_seconds: int | None = None,
     ) -> LLM:
+        if timeout_seconds is not None and timeout_seconds < 1:
+            raise MishkanError(ErrorCode.CONFIGURATION, "model timeout bound is invalid")
         provider_name, model_name = self._provider_model(provider.kind, candidate.model)
         return LLM(
             model=model_name,
@@ -46,7 +60,10 @@ class CrewAIModelRouter:
             base_url=str(provider.endpoint).rstrip("/"),
             api_key=credential,
             temperature=self._config.crewai.temperature,
-            timeout=self._config.crewai.model_timeout_seconds,
+            timeout=min(
+                self._config.crewai.model_timeout_seconds,
+                timeout_seconds or self._config.crewai.model_timeout_seconds,
+            ),
             max_tokens=self._config.crewai.model_max_output_tokens,
             # CrewAI's public LLM factory signature omits this field, while the
             # selected OpenAI-compatible provider exposes and honors it.

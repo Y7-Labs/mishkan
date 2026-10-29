@@ -458,7 +458,10 @@ class WorkerCoordinationRepository:
                 path_scopes=placement_request.path_scopes,
                 capability_requirements=placement_request.capability_requirements,
                 resources=placement_request.resources,
-                deadline=placement_request.deadline,
+                deadline=min(
+                    placement_request.deadline,
+                    now + timedelta(seconds=placement_request.resources.timeout_seconds),
+                ),
                 stateful_effects=placement_request.stateful_effects,
             )
             self._validate_envelope_against_authority(envelope, run, task, plan)
@@ -557,6 +560,14 @@ class WorkerCoordinationRepository:
     ) -> WorkerLease:
         self._require_digest(token_digest)
         now = utc_now()
+        envelope = envelope.model_copy(
+            update={
+                "deadline": min(
+                    envelope.deadline,
+                    now + timedelta(seconds=envelope.resources.timeout_seconds),
+                )
+            }
+        )
         if envelope.deadline <= now:
             raise MishkanError(ErrorCode.WORKER, "remote task deadline has expired")
         try:
