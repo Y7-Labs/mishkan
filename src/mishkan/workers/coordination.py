@@ -22,6 +22,7 @@ from mishkan.persistence.sqlite import (
     OutboxRow,
     PlanRow,
     RemoteTaskEnvelopeRow,
+    RemoteTaskPlacementRow,
     ResultRow,
     RunRow,
     TaskRow,
@@ -39,8 +40,12 @@ from mishkan.workers.models import (
     EffectReportState,
     ImmutableTaskEnvelope,
     RemoteEnvelopeState,
+    RemotePlacement,
+    RemotePlacementRequest,
+    RemotePlacementState,
     TaskResourceLimits,
     WorkerAvailability,
+    WorkerClaimRequest,
     WorkerCompletion,
     WorkerCompletionState,
     WorkerCompletionSubmission,
@@ -49,6 +54,7 @@ from mishkan.workers.models import (
     WorkerLease,
     WorkerLeaseState,
     WorkerState,
+    WorkerTaskClaim,
 )
 
 
@@ -204,6 +210,296 @@ class WorkerCoordinationRepository:
                         str(item.worker_id),
                     ),
                 )
+            )
+
+    def queue_placement(self, request: RemotePlacementRequest) -> RemotePlacement:
+        with Session(self._engine) as session, session.begin():
+            return self.queue_placement_in_session(session, request)
+
+    def queue_placement_in_session(
+        self,
+        session: Session,
+        request: RemotePlacementRequest,
+    ) -> RemotePlacement:
+        """Queue a placement inside the authoritative application-command transaction."""
+
+        now = utc_now()
+        if request.deadline <= now:
+            raise MishkanError(ErrorCode.WORKER, "remote placement deadline has expired")
+        run = session.scalar(
+            select(RunRow).where(RunRow.id == str(request.run_id)).with_for_update()
+        )
+        task = session.scalar(
+            select(TaskRow)
+            .where(
+                TaskRow.run_id == str(request.run_id),
+                TaskRow.task_key == request.task_id,
+            )
+            .with_for_update()
+        )
+        if run is None or task is None:
+            raise MishkanError(ErrorCode.WORKER, "remote placement task does not exist")
+        if run.status != RunState.RUNNING.value or run.cancellation_requested:
+            raise MishkanError(ErrorCode.RUN_INTERRUPTED, "run does not accept remote work")
+        if task.status != TaskState.ELIGIBLE.value:
+            raise MishkanError(
+                ErrorCode.REVISION_MISMATCH,
+                "task is not eligible for remote placement",
+                details={"state": task.status},
+            )
+        if request.preferred_worker_id is not None:
+            self._active_worker(session, request.preferred_worker_id, lock=False)
+        existing = session.scalar(
+            select(RemoteTaskPlacementRow)
+            .where(RemoteTaskPlacementRow.task_row_id == task.id)
+            .with_for_update()
+        )
+        if existing is not None:
+            if existing.request_fingerprint != request.fingerprint:
+                raise MishkanError(
+                    ErrorCode.DUPLICATE_RESULT,
+                    "remote task already has a different placement request",
+                )
+            return self._placement(existing)
+        row = RemoteTaskPlacementRow(
+            id=str(request.id),
+            run_id=run.id,
+            task_row_id=task.id,
+            task_key=task.task_key,
+            state=RemotePlacementState.QUEUED.value,
+            preferred_worker_id=(
+                str(request.preferred_worker_id)
+                if request.preferred_worker_id is not None
+                else None
+            ),
+            selected_worker_id=None,
+            current_envelope_id=None,
+            request_fingerprint=request.fingerprint,
+            request_payload=request.model_dump_json(),
+            revision=1,
+            created_at=request.created_at.isoformat(),
+            updated_at=now.isoformat(),
+        )
+        session.add(row)
+        self._event(
+            session,
+            aggregate_id=run.id,
+            entity_type="run",
+            event_type="worker.task_placement_queued",
+            payload={
+                "placement_id": row.id,
+                "task_id": task.task_key,
+                "preferred_worker_id": row.preferred_worker_id,
+            },
+            run_id=run.id,
+            task_id=task.task_key,
+        )
+        session.flush()
+        return self._placement(row)
+
+    def claim_next(
+        self,
+        worker_id: UUID,
+        request: WorkerClaimRequest,
+    ) -> WorkerTaskClaim | None:
+        """Atomically bind the first compatible queued placement to one worker claim."""
+
+        now = utc_now()
+        self._require_digest(request.lease_token_digest)
+        with Session(self._engine) as session, session.begin():
+            self._active_worker(session, worker_id, lock=True)
+            previous = session.scalar(
+                select(WorkerLeaseRow)
+                .where(WorkerLeaseRow.claim_id == str(request.id))
+                .with_for_update()
+            )
+            if previous is not None:
+                self._require_token(previous, request.lease_token_digest)
+                if previous.worker_id != str(worker_id):
+                    raise MishkanError(ErrorCode.WORKER, "worker claim belongs to another identity")
+                envelope_row = session.get(RemoteTaskEnvelopeRow, previous.envelope_id)
+                if envelope_row is None:
+                    raise MishkanError(ErrorCode.WORKER, "claimed task envelope is missing")
+                return WorkerTaskClaim(
+                    id=request.id,
+                    created_at=request.created_at,
+                    claim_id=request.id,
+                    envelope=self._envelope(envelope_row),
+                    lease=self._lease(previous),
+                )
+            heartbeat = session.scalar(
+                select(WorkerHeartbeatRow)
+                .where(WorkerHeartbeatRow.worker_id == str(worker_id))
+                .with_for_update()
+            )
+            if heartbeat is None or datetime.fromisoformat(heartbeat.expires_at) <= now:
+                raise MishkanError(ErrorCode.WORKER, "worker heartbeat is unavailable or stale")
+            advertisement = WorkerHeartbeat.model_validate_json(heartbeat.payload)
+            active_count = int(
+                session.scalar(
+                    select(func.count(WorkerLeaseRow.id)).where(
+                        WorkerLeaseRow.worker_id == str(worker_id),
+                        WorkerLeaseRow.state == WorkerLeaseState.ACTIVE.value,
+                    )
+                )
+                or 0
+            )
+            capacity = min(
+                advertisement.resources.max_concurrency,
+                self._max_worker_concurrency,
+            )
+            if active_count >= capacity:
+                return None
+            placements = session.scalars(
+                select(RemoteTaskPlacementRow)
+                .where(
+                    RemoteTaskPlacementRow.state == RemotePlacementState.QUEUED.value,
+                    (
+                        (RemoteTaskPlacementRow.preferred_worker_id.is_(None))
+                        | (RemoteTaskPlacementRow.preferred_worker_id == str(worker_id))
+                    ),
+                )
+                .order_by(RemoteTaskPlacementRow.created_at, RemoteTaskPlacementRow.id)
+                .with_for_update(skip_locked=True)
+            ).all()
+            selected: tuple[RemoteTaskPlacementRow, RemotePlacementRequest] | None = None
+            for placement in placements:
+                placement_request = RemotePlacementRequest.model_validate_json(
+                    placement.request_payload
+                )
+                if placement_request.deadline <= now:
+                    placement.state = RemotePlacementState.CANCELLED.value
+                    placement.revision += 1
+                    placement.updated_at = now.isoformat()
+                    continue
+                if not all(
+                    requirement.satisfied_by(advertisement.capabilities)
+                    for requirement in placement_request.capability_requirements
+                ):
+                    continue
+                try:
+                    self._require_resource_capacity(advertisement, placement_request.resources)
+                except MishkanError:
+                    continue
+                selected = placement, placement_request
+                break
+            if selected is None:
+                return None
+            placement, placement_request = selected
+            run = session.scalar(
+                select(RunRow).where(RunRow.id == placement.run_id).with_for_update()
+            )
+            task = session.scalar(
+                select(TaskRow).where(TaskRow.id == placement.task_row_id).with_for_update()
+            )
+            plan = session.scalar(select(PlanRow).where(PlanRow.run_id == placement.run_id))
+            if run is None or task is None or plan is None:
+                raise MishkanError(ErrorCode.WORKER, "remote placement authority is incomplete")
+            envelope = ImmutableTaskEnvelope(
+                run_id=UUID(run.id),
+                task_row_id=UUID(task.id),
+                task_id=task.task_key,
+                task_attempt=task.attempt_count + 1,
+                worker_id=worker_id,
+                execution_context_revision=run.context_revision,
+                repository_id=run.repository_id,
+                repository_revision=run.repository_revision,
+                plan_fingerprint=plan.fingerprint,
+                task_contract=PlanTask.model_validate_json(task.contract).model_dump(mode="json"),
+                role_definition_fingerprint=(placement_request.role_definition_fingerprint),
+                inputs=placement_request.inputs,
+                policy_fingerprint=placement_request.policy_fingerprint,
+                path_scopes=placement_request.path_scopes,
+                capability_requirements=placement_request.capability_requirements,
+                resources=placement_request.resources,
+                deadline=placement_request.deadline,
+                stateful_effects=placement_request.stateful_effects,
+            )
+            self._validate_envelope_against_authority(envelope, run, task, plan)
+            if task.status != TaskState.ELIGIBLE.value:
+                raise MishkanError(
+                    ErrorCode.REVISION_MISMATCH,
+                    "placed task is no longer eligible",
+                )
+            lease_expiry = min(
+                envelope.deadline,
+                now + timedelta(seconds=self._lease_seconds),
+            )
+            lease = WorkerLease(
+                id=new_id(),
+                created_at=now,
+                envelope_id=envelope.id,
+                worker_id=worker_id,
+                state=WorkerLeaseState.ACTIVE,
+                revision=1,
+                issued_at=now,
+                expires_at=lease_expiry,
+                last_renewed_at=now,
+            )
+            session.add(
+                RemoteTaskEnvelopeRow(
+                    id=str(envelope.id),
+                    run_id=run.id,
+                    task_row_id=task.id,
+                    task_key=task.task_key,
+                    task_attempt=envelope.task_attempt,
+                    worker_id=str(worker_id),
+                    state=RemoteEnvelopeState.LEASED.value,
+                    fingerprint=envelope.fingerprint,
+                    stateful_effects=envelope.stateful_effects,
+                    payload=envelope.model_dump_json(),
+                    deadline=envelope.deadline.isoformat(),
+                    created_at=envelope.created_at.isoformat(),
+                    updated_at=now.isoformat(),
+                )
+            )
+            session.add(
+                WorkerLeaseRow(
+                    id=str(lease.id),
+                    envelope_id=str(envelope.id),
+                    worker_id=str(worker_id),
+                    claim_id=str(request.id),
+                    token_digest=request.lease_token_digest,
+                    state=lease.state.value,
+                    revision=lease.revision,
+                    issued_at=lease.issued_at.isoformat(),
+                    expires_at=lease.expires_at.isoformat(),
+                    last_renewed_at=lease.last_renewed_at.isoformat(),
+                    completed_at=None,
+                )
+            )
+            task.status = TaskState.LEASED.value
+            task.attempt_count = envelope.task_attempt
+            task.revision += 1
+            task.updated_at = now.isoformat()
+            placement.state = RemotePlacementState.LEASED.value
+            placement.selected_worker_id = str(worker_id)
+            placement.current_envelope_id = str(envelope.id)
+            placement.revision += 1
+            placement.updated_at = now.isoformat()
+            self._event(
+                session,
+                aggregate_id=run.id,
+                entity_type="run",
+                event_type="worker.task_claimed",
+                payload={
+                    "claim_id": str(request.id),
+                    "placement_id": placement.id,
+                    "worker_id": str(worker_id),
+                    "envelope_id": str(envelope.id),
+                    "lease_id": str(lease.id),
+                    "task_attempt": envelope.task_attempt,
+                },
+                run_id=run.id,
+                task_id=task.task_key,
+            )
+            session.flush()
+            return WorkerTaskClaim(
+                id=request.id,
+                created_at=request.created_at,
+                claim_id=request.id,
+                envelope=envelope,
+                lease=lease,
             )
 
     def issue_lease(
@@ -652,6 +948,15 @@ class WorkerCoordinationRepository:
             completion.decided_at = now.isoformat()
             envelope.state = RemoteEnvelopeState.COMPLETED.value
             envelope.updated_at = now.isoformat()
+            placement = session.scalar(
+                select(RemoteTaskPlacementRow)
+                .where(RemoteTaskPlacementRow.current_envelope_id == envelope.id)
+                .with_for_update()
+            )
+            if placement is not None:
+                placement.state = RemotePlacementState.COMPLETED.value
+                placement.revision += 1
+                placement.updated_at = now.isoformat()
             task.status = TaskState.ACCEPTED.value
             task.revision += 1
             task.updated_at = now.isoformat()
@@ -720,6 +1025,17 @@ class WorkerCoordinationRepository:
                         task.status = TaskState.ELIGIBLE.value
                         task.revision += 1
                         task.updated_at = observed_now.isoformat()
+                    placement = session.scalar(
+                        select(RemoteTaskPlacementRow)
+                        .where(RemoteTaskPlacementRow.current_envelope_id == envelope.id)
+                        .with_for_update()
+                    )
+                    if placement is not None:
+                        placement.state = RemotePlacementState.QUEUED.value
+                        placement.selected_worker_id = None
+                        placement.current_envelope_id = None
+                        placement.revision += 1
+                        placement.updated_at = observed_now.isoformat()
                 envelope.updated_at = observed_now.isoformat()
                 self._event(
                     session,
@@ -769,6 +1085,17 @@ class WorkerCoordinationRepository:
                 raise MishkanError(ErrorCode.WORKER, "remote task state is inconsistent")
             envelope.state = RemoteEnvelopeState.EXPIRED.value
             envelope.updated_at = now.isoformat()
+            placement = session.scalar(
+                select(RemoteTaskPlacementRow)
+                .where(RemoteTaskPlacementRow.current_envelope_id == envelope.id)
+                .with_for_update()
+            )
+            if placement is not None:
+                placement.state = RemotePlacementState.QUEUED.value
+                placement.selected_worker_id = None
+                placement.current_envelope_id = None
+                placement.revision += 1
+                placement.updated_at = now.isoformat()
             task.status = TaskState.ELIGIBLE.value
             task.revision += 1
             task.updated_at = now.isoformat()
@@ -788,6 +1115,13 @@ class WorkerCoordinationRepository:
             if row is None:
                 raise MishkanError(ErrorCode.WORKER, "remote task envelope does not exist")
             return self._envelope(row)
+
+    def placement(self, placement_id: UUID) -> RemotePlacement:
+        with Session(self._engine) as session:
+            row = session.get(RemoteTaskPlacementRow, str(placement_id))
+            if row is None:
+                raise MishkanError(ErrorCode.WORKER, "remote task placement does not exist")
+            return self._placement(row)
 
     def completion(self, completion_id: UUID) -> WorkerCompletion:
         with Session(self._engine) as session:
@@ -963,6 +1297,29 @@ class WorkerCoordinationRepository:
             expires_at=datetime.fromisoformat(row.expires_at),
             last_renewed_at=datetime.fromisoformat(row.last_renewed_at),
             completed_at=(datetime.fromisoformat(row.completed_at) if row.completed_at else None),
+        )
+
+    @staticmethod
+    def _placement(row: RemoteTaskPlacementRow) -> RemotePlacement:
+        request = RemotePlacementRequest.model_validate_json(row.request_payload)
+        if request.fingerprint != row.request_fingerprint:
+            raise MishkanError(ErrorCode.WORKER, "remote placement fingerprint drifted")
+        return RemotePlacement(
+            id=UUID(row.id),
+            created_at=datetime.fromisoformat(row.created_at),
+            run_id=UUID(row.run_id),
+            task_row_id=UUID(row.task_row_id),
+            task_id=row.task_key,
+            state=RemotePlacementState(row.state),
+            request_fingerprint=row.request_fingerprint,
+            selected_worker_id=(
+                UUID(row.selected_worker_id) if row.selected_worker_id is not None else None
+            ),
+            envelope_id=(
+                UUID(row.current_envelope_id) if row.current_envelope_id is not None else None
+            ),
+            revision=row.revision,
+            updated_at=datetime.fromisoformat(row.updated_at),
         )
 
     @staticmethod

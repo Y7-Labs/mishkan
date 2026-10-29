@@ -145,6 +145,7 @@ rules:
         - worker.enrollment.create
         - worker.enrollment.revoke
         - worker.revoke
+        - worker.task.place
         - artifact.upload.open
         - artifact.upload.chunk
         - artifact.upload.commit
@@ -239,6 +240,7 @@ rules:
         - application.schedule.trigger
         - application.worker.enrollment
         - application.worker.identity
+        - application.worker.placement
         - application.artifact.upload
         - application.artifact.reference
         - application.artifact.collection

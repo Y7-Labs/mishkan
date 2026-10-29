@@ -1,5 +1,7 @@
 """Strict public records for authenticated workers and bounded remote execution."""
 
+from __future__ import annotations
+
 from datetime import datetime
 from enum import StrEnum
 from pathlib import PurePosixPath
@@ -60,6 +62,13 @@ class WorkerCompletionState(StrEnum):
     REJECTED = "rejected"
     DUPLICATE = "duplicate"
     STALE = "stale"
+
+
+class RemotePlacementState(StrEnum):
+    QUEUED = "queued"
+    LEASED = "leased"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
 
 
 class EffectReportState(StrEnum):
@@ -261,6 +270,64 @@ class ImmutableTaskEnvelope(DomainRecord):
         return canonical_fingerprint(self.model_dump(mode="json", exclude={"id", "created_at"}))
 
 
+class RemotePlacementRequest(DomainRecord):
+    """Governed daemon request to make one accepted task remotely claimable."""
+
+    run_id: UUID
+    task_id: str = Field(pattern=r"^[a-z][a-z0-9-]{1,63}$")
+    preferred_worker_id: UUID | None = None
+    role_definition_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    inputs: tuple[TaskInputReference, ...] = ()
+    policy_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    path_scopes: tuple[TaskPathScope, ...] = Field(min_length=1)
+    capability_requirements: tuple[CapabilityRequirement, ...]
+    resources: TaskResourceLimits
+    deadline: datetime
+    stateful_effects: bool = False
+
+    @field_validator("deadline")
+    @classmethod
+    def placement_deadline_is_aware(cls, value: datetime) -> datetime:
+        return require_aware(value)
+
+    @model_validator(mode="after")
+    def placement_values_are_unique(self) -> Self:
+        capability_ids = [item.capability_id for item in self.capability_requirements]
+        if len(capability_ids) != len(set(capability_ids)):
+            raise ValueError("placement capability requirements must have unique identities")
+        input_names = [item.name for item in self.inputs]
+        if len(input_names) != len(set(input_names)):
+            raise ValueError("placement input names must be unique")
+        return self
+
+    @property
+    def fingerprint(self) -> str:
+        return canonical_fingerprint(self.model_dump(mode="json", exclude={"id", "created_at"}))
+
+
+class RemotePlacement(DomainRecord):
+    run_id: UUID
+    task_row_id: UUID
+    task_id: str
+    state: RemotePlacementState
+    request_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    selected_worker_id: UUID | None = None
+    envelope_id: UUID | None = None
+    revision: int = Field(ge=1)
+    updated_at: datetime
+
+    @field_validator("updated_at")
+    @classmethod
+    def placement_updated_at_is_aware(cls, value: datetime) -> datetime:
+        return require_aware(value)
+
+
+class WorkerClaimRequest(DomainRecord):
+    """Idempotent pull claim; the worker retains the matching lease secret."""
+
+    lease_token_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class WorkerLease(DomainRecord):
     envelope_id: UUID
     worker_id: UUID
@@ -275,6 +342,12 @@ class WorkerLease(DomainRecord):
     @classmethod
     def lease_timestamps_are_aware(cls, value: datetime | None) -> datetime | None:
         return require_aware(value) if value is not None else None
+
+
+class WorkerTaskClaim(DomainRecord):
+    claim_id: UUID
+    envelope: ImmutableTaskEnvelope
+    lease: WorkerLease
 
 
 class WorkerLeaseGrant(DomainRecord):

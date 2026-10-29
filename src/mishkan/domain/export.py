@@ -227,8 +227,11 @@ from mishkan.web.models import (
 )
 from mishkan.workers.models import (
     ImmutableTaskEnvelope,
+    RemotePlacement,
+    RemotePlacementRequest,
     WorkerCertificateBundle,
     WorkerCertificateRotationRequest,
+    WorkerClaimRequest,
     WorkerCompletion,
     WorkerCompletionSubmission,
     WorkerEnrollmentRequest,
@@ -236,6 +239,7 @@ from mishkan.workers.models import (
     WorkerHeartbeatRecord,
     WorkerIdentity,
     WorkerLeaseGrant,
+    WorkerTaskClaim,
 )
 
 SCHEMAS: dict[str, type[BaseModel]] = {
@@ -262,6 +266,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "config-v1.schema.json": MishkanConfig,
     "worker-certificate-bundle-v1.schema.json": WorkerCertificateBundle,
     "worker-certificate-rotation-request-v1.schema.json": WorkerCertificateRotationRequest,
+    "worker-claim-request-v1.schema.json": WorkerClaimRequest,
     "worker-completion-submission-v1.schema.json": WorkerCompletionSubmission,
     "worker-completion-v1.schema.json": WorkerCompletion,
     "worker-enrollment-request-v1.schema.json": WorkerEnrollmentRequest,
@@ -269,6 +274,9 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "worker-heartbeat-v1.schema.json": WorkerHeartbeat,
     "worker-identity-v1.schema.json": WorkerIdentity,
     "worker-lease-grant-v1.schema.json": WorkerLeaseGrant,
+    "worker-remote-placement-request-v1.schema.json": RemotePlacementRequest,
+    "worker-remote-placement-v1.schema.json": RemotePlacement,
+    "worker-task-claim-v1.schema.json": WorkerTaskClaim,
     "worker-task-envelope-v1.schema.json": ImmutableTaskEnvelope,
     "prospective-run-request-v1.schema.json": ProspectiveRunRequest,
     "repository-establishment-request-v1.schema.json": RepositoryEstablishmentRequest,

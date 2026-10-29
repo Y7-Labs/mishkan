@@ -1,0 +1,256 @@
+{
+  "$defs": {
+    "CapabilityRequirement": {
+      "additionalProperties": false,
+      "description": "Contextual requirement carried by one immutable task envelope.",
+      "properties": {
+        "acceptable_versions": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Acceptable Versions",
+          "type": "array"
+        },
+        "capability_id": {
+          "pattern": "^[a-z][a-z0-9_.-]{2,127}$",
+          "title": "Capability Id",
+          "type": "string"
+        },
+        "required_fingerprint": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required Fingerprint"
+        }
+      },
+      "required": [
+        "capability_id"
+      ],
+      "title": "CapabilityRequirement",
+      "type": "object"
+    },
+    "TaskInputReference": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "format": "uuid",
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Digest",
+          "type": "string"
+        },
+        "name": {
+          "pattern": "^[a-z][a-z0-9_.-]{1,127}$",
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "artifact_id",
+        "digest"
+      ],
+      "title": "TaskInputReference",
+      "type": "object"
+    },
+    "TaskPathScope": {
+      "additionalProperties": false,
+      "properties": {
+        "permissions": {
+          "items": {
+            "enum": [
+              "read",
+              "write",
+              "execute"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Permissions",
+          "type": "array"
+        },
+        "relative_path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Relative Path",
+          "type": "string"
+        },
+        "root_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Root Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root_id",
+        "relative_path",
+        "permissions"
+      ],
+      "title": "TaskPathScope",
+      "type": "object"
+    },
+    "TaskResourceLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "cpu_count": {
+          "anyOf": [
+            {
+              "maximum": 65536,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cpu Count"
+        },
+        "max_result_bytes": {
+          "maximum": 1073741824,
+          "minimum": 1,
+          "title": "Max Result Bytes",
+          "type": "integer"
+        },
+        "memory_bytes": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Memory Bytes"
+        },
+        "timeout_seconds": {
+          "maximum": 604800,
+          "minimum": 1,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "timeout_seconds",
+        "max_result_bytes"
+      ],
+      "title": "TaskResourceLimits",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Governed daemon request to make one accepted task remotely claimable.",
+  "properties": {
+    "capability_requirements": {
+      "items": {
+        "$ref": "#/$defs/CapabilityRequirement"
+      },
+      "title": "Capability Requirements",
+      "type": "array"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "deadline": {
+      "format": "date-time",
+      "title": "Deadline",
+      "type": "string"
+    },
+    "id": {
+      "format": "uuid",
+      "title": "Id",
+      "type": "string"
+    },
+    "inputs": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/TaskInputReference"
+      },
+      "title": "Inputs",
+      "type": "array"
+    },
+    "path_scopes": {
+      "items": {
+        "$ref": "#/$defs/TaskPathScope"
+      },
+      "minItems": 1,
+      "title": "Path Scopes",
+      "type": "array"
+    },
+    "policy_fingerprint": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Policy Fingerprint",
+      "type": "string"
+    },
+    "preferred_worker_id": {
+      "anyOf": [
+        {
+          "format": "uuid",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Preferred Worker Id"
+    },
+    "resources": {
+      "$ref": "#/$defs/TaskResourceLimits"
+    },
+    "role_definition_fingerprint": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Role Definition Fingerprint",
+      "type": "string"
+    },
+    "run_id": {
+      "format": "uuid",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "stateful_effects": {
+      "default": false,
+      "title": "Stateful Effects",
+      "type": "boolean"
+    },
+    "task_id": {
+      "pattern": "^[a-z][a-z0-9-]{1,63}$",
+      "title": "Task Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "task_id",
+    "role_definition_fingerprint",
+    "policy_fingerprint",
+    "path_scopes",
+    "capability_requirements",
+    "resources",
+    "deadline"
+  ],
+  "title": "RemotePlacementRequest",
+  "type": "object"
+}

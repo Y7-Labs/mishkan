@@ -105,6 +105,7 @@ from mishkan.skills.models import (
 )
 from mishkan.telemetry.models import LangSmithFeedbackImportRequest
 from mishkan.tools.models import RegistryEntryKind, RegistryLifecycleAction, RegistryMutation
+from mishkan.workers.models import RemotePlacementRequest
 
 
 class ChangeSetLookup(Protocol):
@@ -177,6 +178,9 @@ COMMAND_SEMANTICS = MappingProxyType(
         ),
         "worker.revoke": CommandSemantics(
             "application.worker.identity", "control", ("worker.revoke",)
+        ),
+        "worker.task.place": CommandSemantics(
+            "application.worker.placement", "coordination", ("worker.task.place",)
         ),
         "artifact.upload.open": CommandSemantics(
             "application.artifact.upload", "artifact", ("artifact.stage",)
@@ -464,6 +468,7 @@ _COMMAND_TARGETS = MappingProxyType(
         "worker.enrollment.create": ("worker_enrollment", "uuid"),
         "worker.enrollment.revoke": ("worker_enrollment", "uuid"),
         "worker.revoke": ("worker", "uuid"),
+        "worker.task.place": ("worker_task_placement", "uuid"),
         "artifact.upload.open": ("artifact_service", "absent"),
         "artifact.upload.chunk": ("artifact_upload", "uuid"),
         "artifact.upload.commit": ("artifact_upload", "uuid"),
@@ -580,6 +585,7 @@ _COMMAND_PAYLOAD_FIELDS = MappingProxyType(
         "worker.enrollment.create": (frozenset({"token_digest"}), frozenset()),
         "worker.enrollment.revoke": (frozenset(), frozenset()),
         "worker.revoke": (frozenset(), frozenset()),
+        "worker.task.place": (frozenset({"request"}), frozenset()),
         "artifact.upload.open": (
             frozenset({"expected_size", "expected_digest", "media_type", "provenance"}),
             frozenset({"sensitivity", "retention"}),
@@ -760,6 +766,7 @@ class AuthorizedApplicationCommand:
     knowledge_promotion_decision: KnowledgePromotionDecision | None = None
     schedule_create: ScheduleCreateRequest | None = None
     schedule_fire: ScheduleFireRequest | None = None
+    worker_placement: RemotePlacementRequest | None = None
 
 
 class ApplicationCommandAuthority:
@@ -859,6 +866,7 @@ class ApplicationCommandAuthority:
         knowledge_promotion_decision: KnowledgePromotionDecision | None = None
         schedule_create: ScheduleCreateRequest | None = None
         schedule_fire: ScheduleFireRequest | None = None
+        worker_placement: RemotePlacementRequest | None = None
 
         try:
             if normalized.command_type == "run.initialize":
@@ -910,6 +918,31 @@ class ApplicationCommandAuthority:
                 if normalized.expected_revision is None:
                     raise ValueError("worker revocation requires an expected revision")
                 external_resources = (f"worker:{normalized.target_id}",)
+            elif normalized.command_type == "worker.task.place":
+                worker_placement = RemotePlacementRequest.model_validate(
+                    normalized.payload["request"]
+                )
+                if str(worker_placement.id) != normalized.target_id:
+                    raise ValueError("worker placement target differs from its request identity")
+                if self._config.distributed is None:
+                    raise MishkanError(
+                        ErrorCode.REQUIRED_DEPENDENCY,
+                        "distributed worker placement is not configured",
+                    )
+                timeout = worker_placement.resources.timeout_seconds
+                paths = tuple(
+                    f"{scope.root_id}:{scope.relative_path}"
+                    for scope in worker_placement.path_scopes
+                )
+                external_resources = (
+                    f"run:{worker_placement.run_id}",
+                    f"task:{worker_placement.run_id}:{worker_placement.task_id}",
+                    *(
+                        (f"worker:{worker_placement.preferred_worker_id}",)
+                        if worker_placement.preferred_worker_id is not None
+                        else ()
+                    ),
+                )
             elif normalized.command_type == "run.repository.establish":
                 repository_establishment_request = RepositoryEstablishmentRequest.model_validate(
                     normalized.payload
@@ -2102,6 +2135,7 @@ class ApplicationCommandAuthority:
             knowledge_promotion_decision=knowledge_promotion_decision,
             schedule_create=schedule_create,
             schedule_fire=schedule_fire,
+            worker_placement=worker_placement,
         )
 
     @staticmethod

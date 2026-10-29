@@ -185,6 +185,7 @@
     "web-search-response-v1.schema.json",
     "worker-certificate-bundle-v1.schema.json",
     "worker-certificate-rotation-request-v1.schema.json",
+    "worker-claim-request-v1.schema.json",
     "worker-completion-submission-v1.schema.json",
     "worker-completion-v1.schema.json",
     "worker-enrollment-request-v1.schema.json",
@@ -192,6 +193,9 @@
     "worker-heartbeat-v1.schema.json",
     "worker-identity-v1.schema.json",
     "worker-lease-grant-v1.schema.json",
+    "worker-remote-placement-request-v1.schema.json",
+    "worker-remote-placement-v1.schema.json",
+    "worker-task-claim-v1.schema.json",
     "worker-task-envelope-v1.schema.json"
   ],
   "schema_version": "1.0"

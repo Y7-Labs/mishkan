@@ -1034,6 +1034,32 @@ class WorkerHeartbeatRow(Base):
     expires_at: Mapped[str] = mapped_column(String(40), nullable=False)
 
 
+class RemoteTaskPlacementRow(Base):
+    __tablename__ = "remote_task_placements"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), nullable=False)
+    task_row_id: Mapped[str] = mapped_column(
+        ForeignKey("tasks.id"), unique=True, nullable=False
+    )
+    task_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    preferred_worker_id: Mapped[str | None] = mapped_column(
+        ForeignKey("worker_identities.id")
+    )
+    selected_worker_id: Mapped[str | None] = mapped_column(
+        ForeignKey("worker_identities.id")
+    )
+    current_envelope_id: Mapped[str | None] = mapped_column(
+        ForeignKey("remote_task_envelopes.id")
+    )
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_payload: Mapped[str] = mapped_column(Text, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
 class RemoteTaskEnvelopeRow(Base):
     __tablename__ = "remote_task_envelopes"
     __table_args__ = (
@@ -1067,6 +1093,7 @@ class WorkerLeaseRow(Base):
         ForeignKey("remote_task_envelopes.id"), unique=True, nullable=False
     )
     worker_id: Mapped[str] = mapped_column(ForeignKey("worker_identities.id"), nullable=False)
+    claim_id: Mapped[str | None] = mapped_column(String(36), unique=True)
     token_digest: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     state: Mapped[str] = mapped_column(String(32), nullable=False)
     revision: Mapped[int] = mapped_column(Integer, nullable=False)

@@ -15,6 +15,7 @@ from mishkan.persistence.sqlite import (
     RemoteTaskEnvelopeRow,
     TaskRow,
     WorkerIdentityRow,
+    WorkerLeaseRow,
     create_local_engine,
 )
 from mishkan.planning.models import (
@@ -30,9 +31,12 @@ from mishkan.workers import (
     CapabilityRequirement,
     EffectReportState,
     ImmutableTaskEnvelope,
+    RemotePlacementRequest,
+    RemotePlacementState,
     TaskPathScope,
     TaskResourceLimits,
     WorkerAvailability,
+    WorkerClaimRequest,
     WorkerCompletionState,
     WorkerCompletionSubmission,
     WorkerCoordinationRepository,
@@ -40,6 +44,7 @@ from mishkan.workers import (
     WorkerHeartbeat,
     WorkerResourceSnapshot,
 )
+from mishkan.workers.coordination import lease_token_digest
 
 
 def _plan() -> AcceptedPlan:
@@ -177,6 +182,43 @@ def _envelope(
     )
 
 
+def _placement_request(
+    run_id: UUID,
+    *,
+    preferred_worker_id: UUID | None = None,
+    stateful: bool = False,
+) -> RemotePlacementRequest:
+    return RemotePlacementRequest(
+        run_id=run_id,
+        task_id="remote-task",
+        preferred_worker_id=preferred_worker_id,
+        role_definition_fingerprint="f" * 64,
+        policy_fingerprint="1" * 64,
+        path_scopes=(
+            TaskPathScope(
+                root_id="repository",
+                relative_path="README.md",
+                permissions=("read",),
+            ),
+        ),
+        capability_requirements=(
+            CapabilityRequirement(
+                capability_id="file.read",
+                acceptable_versions=("1.0.0",),
+                required_fingerprint="e" * 64,
+            ),
+        ),
+        resources=TaskResourceLimits(
+            timeout_seconds=300,
+            memory_bytes=512 * 1024 * 1024,
+            cpu_count=2,
+            max_result_bytes=1024 * 1024,
+        ),
+        deadline=utc_now() + timedelta(minutes=10),
+        stateful_effects=stateful,
+    )
+
+
 def _repository(database: Path) -> WorkerCoordinationRepository:
     return WorkerCoordinationRepository(
         database,
@@ -264,6 +306,123 @@ def test_heartbeat_is_monotone_and_capability_placement_is_contextual(tmp_path: 
     with pytest.raises(MishkanError) as stale:
         repository.record_heartbeat(_heartbeat(worker_id, sequence=1))
     assert stale.value.envelope.code is ErrorCode.REVISION_MISMATCH
+
+
+def test_pull_claim_is_atomic_idempotent_and_keeps_worker_secret_local(
+    tmp_path: Path,
+) -> None:
+    database, runs, coordination, service, run_id, _task_row_id, worker_id = _setup(tmp_path)
+    placement = service.queue(_placement_request(run_id))
+    secret = "worker-retained-lease-secret"
+    request = WorkerClaimRequest(lease_token_digest=lease_token_digest(secret))
+
+    claimed = service.claim(worker_id, request)
+
+    assert claimed is not None
+    assert claimed.claim_id == request.id
+    assert claimed.envelope.worker_id == worker_id
+    assert claimed.envelope.task_attempt == 1
+    assert service.claim(worker_id, request) == claimed
+    assert runs.task_states(str(run_id)) == {"remote-task": TaskState.LEASED.value}
+    projected = coordination.placement(placement.id)
+    assert projected.state is RemotePlacementState.LEASED
+    assert projected.selected_worker_id == worker_id
+    assert projected.envelope_id == claimed.envelope.id
+    with Session(create_local_engine(database)) as session:
+        row = session.get(WorkerLeaseRow, str(claimed.lease.id))
+        assert row is not None
+        assert row.token_digest == lease_token_digest(secret)
+        assert secret not in row.token_digest
+
+    conflicting = request.model_copy(
+        update={"lease_token_digest": lease_token_digest("different-secret")}
+    )
+    with pytest.raises(MishkanError) as reused:
+        service.claim(worker_id, conflicting)
+    assert reused.value.envelope.code is ErrorCode.WORKER
+
+
+def test_expired_pull_claim_is_requeued_for_another_compatible_worker(
+    tmp_path: Path,
+) -> None:
+    _database, _runs, coordination, service, run_id, _task_row_id, worker_id = _setup(tmp_path)
+    second_worker = _worker(_database)
+    service.heartbeat(_heartbeat(second_worker))
+    placement = service.queue(_placement_request(run_id))
+    first = service.claim(
+        worker_id,
+        WorkerClaimRequest(lease_token_digest=lease_token_digest("first-secret")),
+    )
+    assert first is not None
+
+    coordination.expire_leases(now=first.lease.expires_at + timedelta(seconds=1))
+    queued = coordination.placement(placement.id)
+    assert queued.state is RemotePlacementState.QUEUED
+    assert queued.selected_worker_id is None
+    assert queued.envelope_id is None
+
+    second = service.claim(
+        second_worker,
+        WorkerClaimRequest(lease_token_digest=lease_token_digest("second-secret")),
+    )
+    assert second is not None
+    assert second.envelope.worker_id == second_worker
+    assert second.envelope.task_attempt == 2
+
+
+def test_stateful_pull_claim_requires_reconciliation_before_requeue(
+    tmp_path: Path,
+) -> None:
+    database, _runs, coordination, service, run_id, _task_row_id, worker_id = _setup(tmp_path)
+    second_worker = _worker(database)
+    service.heartbeat(_heartbeat(second_worker))
+    placement = service.queue(_placement_request(run_id, stateful=True))
+    first = service.claim(
+        worker_id,
+        WorkerClaimRequest(lease_token_digest=lease_token_digest("stateful-secret")),
+    )
+    assert first is not None
+
+    coordination.expire_leases(now=first.lease.expires_at + timedelta(seconds=1))
+    assert coordination.placement(placement.id).state is RemotePlacementState.LEASED
+    assert (
+        service.claim(
+            second_worker,
+            WorkerClaimRequest(lease_token_digest=lease_token_digest("blocked-secret")),
+        )
+        is None
+    )
+
+    service.reconcile(first.envelope.id, effect_report=EffectReportState.PROVEN)
+    claimed = service.claim(
+        second_worker,
+        WorkerClaimRequest(lease_token_digest=lease_token_digest("reconciled-secret")),
+    )
+    assert claimed is not None
+    assert claimed.envelope.task_attempt == 2
+
+
+def test_pull_claim_respects_preferred_worker_and_observed_capabilities(
+    tmp_path: Path,
+) -> None:
+    database, _runs, _coordination, service, run_id, _task_row_id, worker_id = _setup(tmp_path)
+    preferred = _worker(database)
+    service.heartbeat(_heartbeat(preferred))
+    service.queue(_placement_request(run_id, preferred_worker_id=preferred))
+
+    assert (
+        service.claim(
+            worker_id,
+            WorkerClaimRequest(lease_token_digest=lease_token_digest("wrong-worker")),
+        )
+        is None
+    )
+    claim = service.claim(
+        preferred,
+        WorkerClaimRequest(lease_token_digest=lease_token_digest("preferred-worker")),
+    )
+    assert claim is not None
+    assert claim.envelope.worker_id == preferred
 
 
 def test_lease_delivery_and_acceptance_are_atomic_and_at_most_once(tmp_path: Path) -> None:

@@ -8,6 +8,7 @@ from datetime import timedelta
 from uuid import UUID
 
 from pydantic import SecretStr
+from sqlalchemy.orm import Session
 
 from mishkan.domain.identity import new_id
 from mishkan.domain.time import utc_now
@@ -17,8 +18,11 @@ from mishkan.workers.models import (
     EffectReportState,
     EnrollmentCredential,
     ImmutableTaskEnvelope,
+    RemotePlacement,
+    RemotePlacementRequest,
     TaskResourceLimits,
     WorkerCertificateBundle,
+    WorkerClaimRequest,
     WorkerCompletion,
     WorkerCompletionSubmission,
     WorkerEnrollmentRequest,
@@ -28,6 +32,7 @@ from mishkan.workers.models import (
     WorkerLease,
     WorkerLeaseGrant,
     WorkerRotationRequest,
+    WorkerTaskClaim,
 )
 from mishkan.workers.pki import SignedWorkerCertificate, WorkerCertificateAuthority
 from mishkan.workers.repository import WorkerIdentityRepository
@@ -137,6 +142,19 @@ class WorkerCoordinationService:
         resources: TaskResourceLimits,
     ) -> tuple[WorkerHeartbeatRecord, ...]:
         return self._repository.compatible_workers(requirements, resources)
+
+    def queue(self, request: RemotePlacementRequest) -> RemotePlacement:
+        return self._repository.queue_placement(request)
+
+    def queue_in_session(
+        self,
+        session: Session,
+        request: RemotePlacementRequest,
+    ) -> RemotePlacement:
+        return self._repository.queue_placement_in_session(session, request)
+
+    def claim(self, worker_id: UUID, request: WorkerClaimRequest) -> WorkerTaskClaim | None:
+        return self._repository.claim_next(worker_id, request)
 
     def issue(self, envelope: ImmutableTaskEnvelope) -> WorkerLeaseGrant:
         secret = secrets.token_urlsafe(32)

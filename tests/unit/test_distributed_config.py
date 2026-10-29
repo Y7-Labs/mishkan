@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -23,7 +24,14 @@ from mishkan.crewai.credentials import CredentialPoolResolver
 from mishkan.daemon.bootstrap import DaemonPaths
 from mishkan.daemon.composition import build_artifact_body_store, build_database_runtime
 from mishkan.domain.errors import ErrorCode, MishkanError
+from mishkan.domain.time import utc_now
 from mishkan.policy import Decision
+from mishkan.workers import (
+    CapabilityRequirement,
+    RemotePlacementRequest,
+    TaskPathScope,
+    TaskResourceLimits,
+)
 
 
 class _UnusedLookup:
@@ -221,3 +229,50 @@ def test_worker_admin_commands_have_public_policy_derived_authority(tmp_path: Pa
             )
         )
     assert malformed.value.envelope.code is ErrorCode.OUTPUT_CONTRACT
+
+
+def test_worker_placement_command_derives_exact_contextual_scope(tmp_path: Path) -> None:
+    document = _distributed_document()
+    document["project"]["workspace"] = str(tmp_path)
+    config = MishkanConfig.model_validate(document)
+    authority = ApplicationCommandAuthority(
+        config,
+        tmp_path,
+        _UnusedLookup(),
+        _UnusedLookup(),
+    )
+    placement = RemotePlacementRequest(
+        run_id=uuid4(),
+        task_id="remote-task",
+        role_definition_fingerprint="a" * 64,
+        policy_fingerprint="b" * 64,
+        path_scopes=(
+            TaskPathScope(
+                root_id="repository",
+                relative_path="src",
+                permissions=("read",),
+            ),
+        ),
+        capability_requirements=(CapabilityRequirement(capability_id="file.read"),),
+        resources=TaskResourceLimits(timeout_seconds=90, max_result_bytes=4096),
+        deadline=utc_now() + timedelta(minutes=5),
+    )
+
+    authorized = authority.authorize(
+        ApplicationCommand(
+            command_type="worker.task.place",
+            actor_id="CTO",
+            target_type="worker_task_placement",
+            target_id=str(placement.id),
+            payload={"request": placement.model_dump(mode="json")},
+        )
+    )
+
+    assert authorized.decision.decision is Decision.ALLOW
+    assert authorized.worker_placement == placement
+    assert authorized.request.capability == "application.worker.placement"
+    assert authorized.request.paths == ("repository:src",)
+    assert authorized.request.external_resources == (
+        f"run:{placement.run_id}",
+        f"task:{placement.run_id}:remote-task",
+    )

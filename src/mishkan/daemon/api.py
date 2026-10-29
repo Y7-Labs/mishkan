@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives import serialization
 from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import SecretStr
 from sqlalchemy.orm import Session
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -237,13 +238,22 @@ from mishkan.tools.inspection import ContentInspector, InspectionProfileLoader
 from mishkan.tools.isolation import IsolationProfileLoader, observe_container_commands
 from mishkan.tools.lifecycle import ToolRegistryLifecycle
 from mishkan.web.network import HttpxWebTransport
+from mishkan.workers.coordination import WorkerCoordinationRepository
 from mishkan.workers.models import (
     WorkerCertificateBundle,
     WorkerCertificateRotationRequest,
+    WorkerClaimRequest,
+    WorkerCompletion,
+    WorkerCompletionSubmission,
     WorkerEnrollmentRequest,
+    WorkerHeartbeat,
+    WorkerHeartbeatRecord,
     WorkerIdentity,
+    WorkerLease,
     WorkerRotationRequest,
+    WorkerTaskClaim,
 )
+from mishkan.workers.service import WorkerCoordinationService
 from mishkan.workers.transport import peer_certificate_der
 
 _P = ParamSpec("_P")
@@ -485,6 +495,21 @@ def create_app(
     )
     worker_enrollment = (
         worker_identity_services[1] if worker_identity_services is not None else None
+    )
+    distributed_config = config.distributed
+    worker_coordination = (
+        WorkerCoordinationService(
+            WorkerCoordinationRepository(
+                database_runtime,
+                heartbeat_timeout_seconds=distributed_config.heartbeat_timeout_seconds,
+                lease_seconds=distributed_config.lease_seconds,
+                max_worker_concurrency=distributed_config.max_worker_concurrency,
+                max_completion_bytes=distributed_config.max_completion_bytes,
+                busy_timeout_ms=busy_timeout_ms,
+            )
+        )
+        if distributed_config is not None
+        else None
     )
     repository = SQLiteApplicationRepository(
         database_runtime,
@@ -1097,7 +1122,6 @@ def create_app(
                     schedule_driver.enqueue(occurrence.occurrence_id)
             return result
         if command.command_type.startswith("worker."):
-            distributed_config = config.distributed
             if worker_repository is None or distributed_config is None:
                 raise MishkanError(
                     ErrorCode.REQUIRED_DEPENDENCY,
@@ -1151,12 +1175,30 @@ def create_app(
                         "revision": identity.revision,
                         **_authorization_projection(authorized),
                     }
+                if command.command_type == "worker.task.place":
+                    if worker_coordination is None or authorized.worker_placement is None:
+                        raise MishkanError(
+                            ErrorCode.OUTPUT_CONTRACT,
+                            "authorized worker placement is absent",
+                        )
+                    placement = worker_coordination.queue_in_session(
+                        session,
+                        authorized.worker_placement,
+                    )
+                    payload = placement.model_dump(mode="json")
+                    return payload, {
+                        "placement_id": str(placement.id),
+                        "run_id": str(placement.run_id),
+                        "task_id": placement.task_id,
+                        **_authorization_projection(authorized),
+                    }
                 raise MishkanError(ErrorCode.OUTPUT_CONTRACT, "unknown worker command")
 
             event_types = {
                 "worker.enrollment.create": "worker.enrollment_token_created",
                 "worker.enrollment.revoke": "worker.enrollment_token_revoked",
                 "worker.revoke": "worker.revoked",
+                "worker.task.place": "worker.task_placement_accepted",
             }
             async with command_lock:
                 try:
@@ -1568,6 +1610,105 @@ def create_app(
                 current_certificate_serial=serial,
                 certificate_signing_request_pem=rotation.certificate_signing_request_pem,
             ),
+        )
+
+    @app.post("/v1/workers/heartbeat", response_model=WorkerHeartbeatRecord)
+    async def worker_heartbeat(
+        heartbeat: WorkerHeartbeat,
+        request: Request,
+    ) -> WorkerHeartbeatRecord:
+        if worker_coordination is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker coordination is not configured",
+            )
+        identity, _serial = await _thread_call(authenticated_worker, request)
+        if heartbeat.worker_id != identity.id:
+            raise MishkanError(
+                ErrorCode.AUTHORITY_NOT_GRANTED,
+                "worker heartbeat identity differs from its mTLS peer",
+            )
+        return await _thread_call(worker_coordination.heartbeat, heartbeat)
+
+    @app.post("/v1/workers/tasks/claim", response_model=WorkerTaskClaim | None)
+    async def worker_task_claim(
+        claim: WorkerClaimRequest,
+        request: Request,
+    ) -> WorkerTaskClaim | None:
+        if worker_coordination is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker coordination is not configured",
+            )
+        identity, _serial = await _thread_call(authenticated_worker, request)
+        return await _thread_call(worker_coordination.claim, identity.id, claim)
+
+    @app.post("/v1/workers/leases/{lease_id}/start", response_model=WorkerLease)
+    async def worker_lease_start(
+        lease_id: UUID,
+        request: Request,
+        lease_token: Annotated[
+            str,
+            Header(alias="X-Mishkan-Lease-Token", min_length=43, max_length=256),
+        ],
+    ) -> WorkerLease:
+        if worker_coordination is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker coordination is not configured",
+            )
+        identity, _serial = await _thread_call(authenticated_worker, request)
+        return await _thread_call(
+            worker_coordination.begin,
+            identity.id,
+            lease_id,
+            SecretStr(lease_token),
+        )
+
+    @app.post("/v1/workers/leases/{lease_id}/renew", response_model=WorkerLease)
+    async def worker_lease_renew(
+        lease_id: UUID,
+        request: Request,
+        expected_revision: Annotated[int, Query(ge=1)],
+        lease_token: Annotated[
+            str,
+            Header(alias="X-Mishkan-Lease-Token", min_length=43, max_length=256),
+        ],
+    ) -> WorkerLease:
+        if worker_coordination is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker coordination is not configured",
+            )
+        identity, _serial = await _thread_call(authenticated_worker, request)
+        return await _thread_call(
+            worker_coordination.renew,
+            identity.id,
+            lease_id,
+            SecretStr(lease_token),
+            expected_revision=expected_revision,
+        )
+
+    @app.post("/v1/workers/tasks/complete", response_model=WorkerCompletion)
+    async def worker_task_complete(
+        completion: WorkerCompletionSubmission,
+        request: Request,
+        lease_token: Annotated[
+            str,
+            Header(alias="X-Mishkan-Lease-Token", min_length=43, max_length=256),
+        ],
+    ) -> WorkerCompletion:
+        if worker_coordination is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "distributed worker coordination is not configured",
+            )
+        identity, _serial = await _thread_call(authenticated_worker, request)
+        return await _thread_call(
+            worker_coordination.complete,
+            identity.id,
+            completion,
+            SecretStr(lease_token),
         )
 
     @app.get("/v1/workers", response_model=None)
