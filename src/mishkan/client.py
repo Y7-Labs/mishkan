@@ -99,11 +99,15 @@ from mishkan.knowledge import (
     KnowledgeRefreshRequest,
 )
 from mishkan.missions import (
+    CrewAdaptationDecision,
     MissionBrief,
+    MissionCollaborationPlan,
     MissionCompletionReadiness,
     MissionCrewRevision,
     MissionEnvironmentReadiness,
+    MissionHandoff,
     MissionRecord,
+    MissionRetrospective,
     MissionRunBinding,
     MissionRunReport,
     MissionTaskAssignment,
@@ -112,6 +116,9 @@ from mishkan.missions import (
     MissionTaskEligibility,
     MissionTemplateDefinition,
     MissionTransition,
+    TeamHealthEvaluation,
+    TeamHealthEvaluationRequest,
+    TeamSignal,
 )
 from mishkan.missions.environment import (
     MissionEnvironmentPlan,
@@ -594,6 +601,101 @@ class Mishkan:
         )
         return MissionCrewRevision.model_validate(result.payload)
 
+    def record_mission_collaboration(
+        self, plan: MissionCollaborationPlan
+    ) -> MissionCollaborationPlan:
+        result = self.command(
+            ApplicationCommand(
+                command_type="mission.collaboration.record",
+                actor_id=self.principal_id,
+                target_type="mission_collaboration",
+                target_id=str(plan.plan_id),
+                expected_revision=0,
+                payload={"plan": plan.model_dump(mode="json")},
+            )
+        )
+        return MissionCollaborationPlan.model_validate(result.payload)
+
+    def record_team_health(self, evaluation: TeamHealthEvaluation) -> TeamHealthEvaluation:
+        result = self.command(
+            ApplicationCommand(
+                command_type="mission.health.record",
+                actor_id=self.principal_id,
+                target_type="team_health_evaluation",
+                target_id=str(evaluation.evaluation_id),
+                expected_revision=0,
+                payload={"evaluation": evaluation.model_dump(mode="json")},
+            )
+        )
+        return TeamHealthEvaluation.model_validate(result.payload)
+
+    def evaluate_team_health(self, request: TeamHealthEvaluationRequest) -> TeamHealthEvaluation:
+        result = self.command(
+            ApplicationCommand(
+                command_type="mission.health.evaluate",
+                actor_id=self.principal_id,
+                target_type="team_health_evaluation",
+                target_id=str(request.request_id),
+                expected_revision=0,
+                payload={"request": request.model_dump(mode="json")},
+            )
+        )
+        return TeamHealthEvaluation.model_validate(result.payload)
+
+    def record_crew_adaptation(self, decision: CrewAdaptationDecision) -> CrewAdaptationDecision:
+        result = self.command(
+            ApplicationCommand(
+                command_type="mission.adaptation.record",
+                actor_id=self.principal_id,
+                target_type="crew_adaptation",
+                target_id=str(decision.decision_id),
+                expected_revision=0,
+                payload={"decision": decision.model_dump(mode="json")},
+            )
+        )
+        return CrewAdaptationDecision.model_validate(result.payload)
+
+    def record_mission_retrospective(
+        self, retrospective: MissionRetrospective
+    ) -> MissionRetrospective:
+        result = self.command(
+            ApplicationCommand(
+                command_type="mission.retrospective.record",
+                actor_id=self.principal_id,
+                target_type="mission_retrospective",
+                target_id=str(retrospective.retrospective_id),
+                expected_revision=0,
+                payload={"retrospective": retrospective.model_dump(mode="json")},
+            )
+        )
+        return MissionRetrospective.model_validate(result.payload)
+
+    def record_team_signal(self, signal: TeamSignal) -> TeamSignal:
+        result = self.command(
+            ApplicationCommand(
+                command_type="mission.signal.record",
+                actor_id=self.principal_id,
+                target_type="team_signal",
+                target_id=str(signal.signal_id),
+                expected_revision=0,
+                payload={"signal": signal.model_dump(mode="json")},
+            )
+        )
+        return TeamSignal.model_validate(result.payload)
+
+    def record_mission_handoff(self, handoff: MissionHandoff) -> MissionHandoff:
+        result = self.command(
+            ApplicationCommand(
+                command_type="mission.handoff.record",
+                actor_id=self.principal_id,
+                target_type="mission_handoff",
+                target_id=str(handoff.handoff_id),
+                expected_revision=0,
+                payload={"handoff": handoff.model_dump(mode="json")},
+            )
+        )
+        return MissionHandoff.model_validate(result.payload)
+
     def record_mission_assignment(self, assignment: MissionTaskAssignment) -> MissionTaskAssignment:
         result = self.command(
             ApplicationCommand(
@@ -714,6 +816,71 @@ class Mishkan:
         )
         response.raise_for_status()
         return MissionCrewRevision.model_validate(response.json())
+
+    def mission_collaboration(
+        self, mission_id: str, *, version: int | None = None
+    ) -> MissionCollaborationPlan:
+        params = {} if version is None else {"version": version}
+        response = self._client.get(
+            f"/v1/missions/{quote(mission_id, safe='')}/collaboration",
+            headers=self._headers(),
+            params=params,
+        )
+        response.raise_for_status()
+        return MissionCollaborationPlan.model_validate(response.json())
+
+    def mission_health(
+        self, mission_id: str, *, limit: int = 100
+    ) -> tuple[TeamHealthEvaluation, ...]:
+        response = self._client.get(
+            f"/v1/missions/{quote(mission_id, safe='')}/health",
+            headers=self._headers(),
+            params={"limit": limit},
+        )
+        response.raise_for_status()
+        return tuple(TeamHealthEvaluation.model_validate(item) for item in response.json())
+
+    def mission_adaptations(
+        self, mission_id: str, *, limit: int = 100
+    ) -> tuple[CrewAdaptationDecision, ...]:
+        response = self._client.get(
+            f"/v1/missions/{quote(mission_id, safe='')}/adaptations",
+            headers=self._headers(),
+            params={"limit": limit},
+        )
+        response.raise_for_status()
+        return tuple(CrewAdaptationDecision.model_validate(item) for item in response.json())
+
+    def mission_retrospectives(
+        self, mission_id: str, *, limit: int = 100
+    ) -> tuple[MissionRetrospective, ...]:
+        response = self._client.get(
+            f"/v1/missions/{quote(mission_id, safe='')}/retrospective",
+            headers=self._headers(),
+            params={"limit": limit},
+        )
+        response.raise_for_status()
+        return tuple(MissionRetrospective.model_validate(item) for item in response.json())
+
+    def mission_signals(self, mission_id: str, *, limit: int = 1_000) -> tuple[TeamSignal, ...]:
+        response = self._client.get(
+            f"/v1/missions/{quote(mission_id, safe='')}/signals",
+            headers=self._headers(),
+            params={"limit": limit},
+        )
+        response.raise_for_status()
+        return tuple(TeamSignal.model_validate(item) for item in response.json())
+
+    def mission_handoffs(
+        self, mission_id: str, *, limit: int = 1_000
+    ) -> tuple[MissionHandoff, ...]:
+        response = self._client.get(
+            f"/v1/missions/{quote(mission_id, safe='')}/handoffs",
+            headers=self._headers(),
+            params={"limit": limit},
+        )
+        response.raise_for_status()
+        return tuple(MissionHandoff.model_validate(item) for item in response.json())
 
     def mission_assignments(
         self, mission_id: str, *, limit: int = 1_000

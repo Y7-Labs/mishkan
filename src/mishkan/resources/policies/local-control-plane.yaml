@@ -1,6 +1,6 @@
 schema_version: "1.0"
 source_id: bundled.local
-revision: "31"
+revision: "33"
 adoption_authority: MISHKAN release
 priority: 0
 rules:
@@ -215,6 +215,13 @@ rules:
         - mission.create
         - mission.brief.record
         - mission.crew.record
+        - mission.collaboration.record
+        - mission.health.record
+        - mission.health.evaluate
+        - mission.adaptation.record
+        - mission.retrospective.record
+        - mission.signal.record
+        - mission.handoff.record
         - conversation.create
         - conversation.message.post
         - mission.decision.record
@@ -281,6 +288,10 @@ rules:
         - application.mission.lifecycle
         - application.mission.brief
         - application.mission.crew
+        - application.mission.collaboration
+        - application.mission.health
+        - application.mission.adaptation
+        - application.mission.retrospective
         - application.mission.environment
         - application.organization.evolution
         - application.conversation.lifecycle

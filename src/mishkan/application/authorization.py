@@ -68,14 +68,21 @@ from mishkan.knowledge import (
     KnowledgeRefreshRequest,
 )
 from mishkan.missions import (
+    CrewAdaptationDecision,
     MissionBrief,
+    MissionCollaborationPlan,
     MissionCrewRevision,
+    MissionHandoff,
     MissionRecord,
+    MissionRetrospective,
     MissionRunBinding,
     MissionRunReport,
     MissionTaskAssignment,
     MissionTaskClaimRequest,
     MissionTransition,
+    TeamHealthEvaluation,
+    TeamHealthEvaluationRequest,
+    TeamSignal,
 )
 from mishkan.missions.environment import (
     MissionEnvironmentPlan,
@@ -384,6 +391,35 @@ COMMAND_SEMANTICS = MappingProxyType(
         "mission.crew.record": CommandSemantics(
             "application.mission.crew", "coordination", ("mission.crew.record",)
         ),
+        "mission.collaboration.record": CommandSemantics(
+            "application.mission.collaboration",
+            "coordination",
+            ("mission.collaboration.record",),
+        ),
+        "mission.health.record": CommandSemantics(
+            "application.mission.health", "coordination", ("mission.health.record",)
+        ),
+        "mission.health.evaluate": CommandSemantics(
+            "application.mission.health", "coordination", ("mission.health.evaluate",)
+        ),
+        "mission.adaptation.record": CommandSemantics(
+            "application.mission.adaptation",
+            "coordination",
+            ("mission.adaptation.record",),
+        ),
+        "mission.retrospective.record": CommandSemantics(
+            "application.mission.retrospective",
+            "coordination",
+            ("mission.retrospective.record",),
+        ),
+        "mission.signal.record": CommandSemantics(
+            "application.mission.health", "coordination", ("mission.signal.record",)
+        ),
+        "mission.handoff.record": CommandSemantics(
+            "application.mission.collaboration",
+            "coordination",
+            ("mission.handoff.record",),
+        ),
         "conversation.create": CommandSemantics(
             "application.conversation.lifecycle", "coordination", ("conversation.create",)
         ),
@@ -540,6 +576,13 @@ _COMMAND_TARGETS = MappingProxyType(
         "mission.create": ("mission", "uuid"),
         "mission.brief.record": ("mission", "uuid"),
         "mission.crew.record": ("mission", "uuid"),
+        "mission.collaboration.record": ("mission_collaboration", "uuid"),
+        "mission.health.record": ("team_health_evaluation", "uuid"),
+        "mission.health.evaluate": ("team_health_evaluation", "uuid"),
+        "mission.adaptation.record": ("crew_adaptation", "uuid"),
+        "mission.retrospective.record": ("mission_retrospective", "uuid"),
+        "mission.signal.record": ("team_signal", "uuid"),
+        "mission.handoff.record": ("mission_handoff", "uuid"),
         "conversation.create": ("conversation", "uuid"),
         "conversation.message.post": ("conversation_message", "uuid"),
         "mission.decision.record": ("mission_decision", "uuid"),
@@ -691,6 +734,13 @@ _COMMAND_PAYLOAD_FIELDS = MappingProxyType(
         "mission.create": (frozenset({"record"}), frozenset()),
         "mission.brief.record": (frozenset({"brief"}), frozenset()),
         "mission.crew.record": (frozenset({"crew"}), frozenset()),
+        "mission.collaboration.record": (frozenset({"plan"}), frozenset()),
+        "mission.health.record": (frozenset({"evaluation"}), frozenset()),
+        "mission.health.evaluate": (frozenset({"request"}), frozenset()),
+        "mission.adaptation.record": (frozenset({"decision"}), frozenset()),
+        "mission.retrospective.record": (frozenset({"retrospective"}), frozenset()),
+        "mission.signal.record": (frozenset({"signal"}), frozenset()),
+        "mission.handoff.record": (frozenset({"handoff"}), frozenset()),
         "conversation.create": (frozenset({"channel"}), frozenset()),
         "conversation.message.post": (frozenset({"message"}), frozenset()),
         "mission.decision.record": (frozenset({"decision"}), frozenset()),
@@ -752,6 +802,13 @@ class AuthorizedApplicationCommand:
     mission_record: MissionRecord | None = None
     mission_brief: MissionBrief | None = None
     mission_crew: MissionCrewRevision | None = None
+    mission_collaboration: MissionCollaborationPlan | None = None
+    team_health_evaluation: TeamHealthEvaluation | None = None
+    team_health_evaluation_request: TeamHealthEvaluationRequest | None = None
+    crew_adaptation: CrewAdaptationDecision | None = None
+    mission_retrospective: MissionRetrospective | None = None
+    team_signal: TeamSignal | None = None
+    mission_handoff: MissionHandoff | None = None
     conversation_channel: ConversationChannel | None = None
     conversation_message: ConversationMessage | None = None
     mission_decision: MissionDecision | None = None
@@ -852,6 +909,13 @@ class ApplicationCommandAuthority:
         mission_record: MissionRecord | None = None
         mission_brief: MissionBrief | None = None
         mission_crew: MissionCrewRevision | None = None
+        mission_collaboration: MissionCollaborationPlan | None = None
+        team_health_evaluation: TeamHealthEvaluation | None = None
+        team_health_evaluation_request: TeamHealthEvaluationRequest | None = None
+        crew_adaptation: CrewAdaptationDecision | None = None
+        mission_retrospective: MissionRetrospective | None = None
+        team_signal: TeamSignal | None = None
+        mission_handoff: MissionHandoff | None = None
         conversation_channel: ConversationChannel | None = None
         conversation_message: ConversationMessage | None = None
         mission_decision: MissionDecision | None = None
@@ -1661,6 +1725,113 @@ class ApplicationCommandAuthority:
                     f"mission-brief:{mission_crew.mission_id}:{mission_crew.brief_version}",
                     *(f"identity:{member.identity_id}" for member in mission_crew.members),
                 )
+            elif normalized.command_type == "mission.collaboration.record":
+                mission_collaboration = MissionCollaborationPlan.model_validate(
+                    normalized.payload["plan"]
+                )
+                if normalized.target_id != str(mission_collaboration.plan_id):
+                    raise ValueError("collaboration target differs from its identity")
+                external_resources = (
+                    f"mission:{mission_collaboration.mission_id}",
+                    f"mission-crew:{mission_collaboration.mission_id}:"
+                    f"{mission_collaboration.crew_version}",
+                    f"crewai-coordination:{mission_collaboration.crewai_coordination_reference}",
+                    *(f"artifact:{item}" for item in mission_collaboration.artifact_references),
+                )
+            elif normalized.command_type == "mission.health.record":
+                team_health_evaluation = TeamHealthEvaluation.model_validate(
+                    normalized.payload["evaluation"]
+                )
+                if normalized.target_id != str(team_health_evaluation.evaluation_id):
+                    raise ValueError("team-health target differs from its identity")
+                if team_health_evaluation.evaluator_identity != normalized.actor_id:
+                    raise MishkanError(
+                        ErrorCode.AUTHORITY_NOT_GRANTED,
+                        "team-health evaluator must match the authenticated actor",
+                    )
+                external_resources = (
+                    f"mission:{team_health_evaluation.mission_id}",
+                    *(f"evidence:{item}" for item in team_health_evaluation.evidence_references),
+                )
+            elif normalized.command_type == "mission.health.evaluate":
+                team_health_evaluation_request = TeamHealthEvaluationRequest.model_validate(
+                    normalized.payload["request"]
+                )
+                if normalized.target_id != str(team_health_evaluation_request.request_id):
+                    raise ValueError("team-health request target differs from its identity")
+                external_resources = (
+                    f"mission:{team_health_evaluation_request.mission_id}",
+                    f"identity:{team_health_evaluation_request.evaluator_identity}",
+                    *(
+                        f"evidence:{item}"
+                        for item in team_health_evaluation_request.evidence_references
+                    ),
+                )
+            elif normalized.command_type == "mission.adaptation.record":
+                crew_adaptation = CrewAdaptationDecision.model_validate(
+                    normalized.payload["decision"]
+                )
+                if normalized.target_id != str(crew_adaptation.decision_id):
+                    raise ValueError("crew-adaptation target differs from its identity")
+                if crew_adaptation.decided_by != normalized.actor_id:
+                    raise MishkanError(
+                        ErrorCode.AUTHORITY_NOT_GRANTED,
+                        "adaptation decision actor must match the authenticated actor",
+                    )
+                external_resources = (
+                    f"mission:{crew_adaptation.mission_id}",
+                    *(f"task:{item}" for item in crew_adaptation.affected_task_ids),
+                    *(f"decision:{item}" for item in crew_adaptation.approval_references),
+                )
+                effects = tuple(
+                    sorted(
+                        {
+                            *effects,
+                            *(
+                                f"mission.adaptation.{item.value}"
+                                for item in crew_adaptation.adaptation_kinds
+                            ),
+                        }
+                    )
+                )
+            elif normalized.command_type == "mission.retrospective.record":
+                mission_retrospective = MissionRetrospective.model_validate(
+                    normalized.payload["retrospective"]
+                )
+                if normalized.target_id != str(mission_retrospective.retrospective_id):
+                    raise ValueError("retrospective target differs from its identity")
+                if mission_retrospective.authored_by != normalized.actor_id:
+                    raise MishkanError(
+                        ErrorCode.AUTHORITY_NOT_GRANTED,
+                        "retrospective author must match the authenticated actor",
+                    )
+                external_resources = (
+                    f"mission:{mission_retrospective.mission_id}",
+                    *(f"evidence:{item}" for item in mission_retrospective.evidence_references),
+                )
+            elif normalized.command_type == "mission.signal.record":
+                team_signal = TeamSignal.model_validate(normalized.payload["signal"])
+                if normalized.target_id != str(team_signal.signal_id):
+                    raise ValueError("team-signal target differs from its identity")
+                external_resources = (
+                    f"mission:{team_signal.mission_id}",
+                    *(f"task:{item}" for item in team_signal.task_ids),
+                    *(f"evidence:{item}" for item in team_signal.evidence_references),
+                )
+            elif normalized.command_type == "mission.handoff.record":
+                mission_handoff = MissionHandoff.model_validate(normalized.payload["handoff"])
+                if normalized.target_id != str(mission_handoff.handoff_id):
+                    raise ValueError("handoff target differs from its identity")
+                if mission_handoff.from_identity != normalized.actor_id:
+                    raise MishkanError(
+                        ErrorCode.AUTHORITY_NOT_GRANTED,
+                        "handoff producer must match the authenticated actor",
+                    )
+                external_resources = (
+                    f"mission:{mission_handoff.mission_id}",
+                    f"task:{mission_handoff.task_id}",
+                    *(f"artifact:{item}" for item in mission_handoff.artifact_references),
+                )
             elif normalized.command_type == "conversation.create":
                 conversation_channel = ConversationChannel.model_validate(
                     normalized.payload["channel"]
@@ -2136,6 +2307,13 @@ class ApplicationCommandAuthority:
             mission_record=mission_record,
             mission_brief=mission_brief,
             mission_crew=mission_crew,
+            mission_collaboration=mission_collaboration,
+            team_health_evaluation=team_health_evaluation,
+            team_health_evaluation_request=team_health_evaluation_request,
+            crew_adaptation=crew_adaptation,
+            mission_retrospective=mission_retrospective,
+            team_signal=team_signal,
+            mission_handoff=mission_handoff,
             conversation_channel=conversation_channel,
             conversation_message=conversation_message,
             mission_decision=mission_decision,
