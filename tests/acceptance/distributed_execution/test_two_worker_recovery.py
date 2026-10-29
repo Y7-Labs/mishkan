@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
+from threading import Barrier
 from uuid import UUID, uuid4
 
 import pytest
@@ -404,20 +406,39 @@ def test_two_workers_recover_loss_and_accept_exactly_once(tmp_path: Path) -> Non
         )
 
         service.queue(_placement(run_id, "recovered-task", None))
-        lost_claim, lost_token = _claim(service, worker_one)
+        barrier = Barrier(2)
+
+        def contend(worker_id: UUID):  # type: ignore[no-untyped-def]
+            token = SecretStr(f"lease-{uuid4()}-{uuid4()}")
+            request = WorkerClaimRequest(
+                lease_token_digest=lease_token_digest(token.get_secret_value())
+            )
+            barrier.wait(timeout=10)
+            return worker_id, token, service.claim(worker_id, request)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            contenders = tuple(pool.map(contend, (worker_one, worker_two), timeout=30))
+        winners = tuple(item for item in contenders if item[2] is not None)
+        losers = tuple(item for item in contenders if item[2] is None)
+        assert len(winners) == 1
+        assert len(losers) == 1
+        lost_worker, lost_token, lost_claim = winners[0]
+        recovery_worker = losers[0][0]
+        assert lost_claim is not None
+        service.begin(lost_worker, lost_claim.lease.id, lost_token)
         repository.expire_leases(now=lost_claim.lease.expires_at + timedelta(seconds=1))
 
-        recovered_claim, recovered_token = _claim(service, worker_two)
+        recovered_claim, recovered_token = _claim(service, recovery_worker)
         assert recovered_claim.envelope.task_attempt == lost_claim.envelope.task_attempt + 1
         result = _result("recovered-task")
         stale = service.complete(
-            worker_one,
+            lost_worker,
             _submission(lost_claim, result),
             lost_token,
         )
         assert stale.state is WorkerCompletionState.STALE
         delivered_submission = _submission(recovered_claim, result)
-        delivered = service.complete(worker_two, delivered_submission, recovered_token)
+        delivered = service.complete(recovery_worker, delivered_submission, recovered_token)
         accepted = repository.accept_completion(
             delivered.id,
             result,
@@ -425,9 +446,9 @@ def test_two_workers_recover_loss_and_accept_exactly_once(tmp_path: Path) -> Non
         )
         assert accepted.state is WorkerCompletionState.ACCEPTED
 
-        replay = service.complete(worker_two, delivered_submission, recovered_token)
+        replay = service.complete(recovery_worker, delivered_submission, recovered_token)
         duplicate = service.complete(
-            worker_two,
+            recovery_worker,
             _submission(recovered_claim, result),
             recovered_token,
         )
