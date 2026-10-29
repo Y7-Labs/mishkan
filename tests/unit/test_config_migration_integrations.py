@@ -30,7 +30,7 @@ def test_explicit_config_migration_adds_public_integration_surfaces(tmp_path: Pa
     migrate_to_latest(source)
     config = ConfigLoader().load([source]).value
 
-    assert config.schema_version == "1.8"
+    assert config.schema_version == "1.9"
     assert config.web is not None
     assert config.browser is not None
     assert config.mcp is not None
@@ -42,6 +42,7 @@ def test_explicit_config_migration_adds_public_integration_surfaces(tmp_path: Pa
     assert config.skills.sources[0].default_activation.value == "candidate"
     assert config.engineering_profile is not None
     assert config.knowledge is not None
+    assert config.team_effectiveness is not None
 
 
 def test_latest_migration_can_cross_both_explicit_previous_versions(tmp_path: Path) -> None:
@@ -51,11 +52,12 @@ def test_latest_migration_can_cross_both_explicit_previous_versions(tmp_path: Pa
     migrate_to_latest(source)
     config = ConfigLoader().load([source]).value
 
-    assert config.schema_version == "1.8"
+    assert config.schema_version == "1.9"
     assert config.daemon is not None
     assert config.web is not None
     assert config.skills is not None
     assert config.knowledge is not None
+    assert config.team_effectiveness is not None
 
 
 def test_latest_migration_adds_skills_to_schema_1_3(tmp_path: Path) -> None:
@@ -65,10 +67,11 @@ def test_latest_migration_adds_skills_to_schema_1_3(tmp_path: Path) -> None:
     migrate_to_latest(source)
     config = ConfigLoader().load([source]).value
 
-    assert config.schema_version == "1.8"
+    assert config.schema_version == "1.9"
     assert config.web is not None
     assert config.skills is not None
     assert config.knowledge is not None
+    assert config.team_effectiveness is not None
 
 
 def test_latest_migration_adds_engineering_profile_to_schema_1_4(tmp_path: Path) -> None:
@@ -78,10 +81,11 @@ def test_latest_migration_adds_engineering_profile_to_schema_1_4(tmp_path: Path)
     migrate_to_latest(source)
     config = ConfigLoader().load([source]).value
 
-    assert config.schema_version == "1.8"
+    assert config.schema_version == "1.9"
     assert config.skills is not None
     assert config.engineering_profile == "package://mishkan.resources.environment/default.yaml"
     assert config.knowledge is not None
+    assert config.team_effectiveness is not None
 
 
 def test_latest_migration_adds_knowledge_to_schema_1_5(tmp_path: Path) -> None:
@@ -91,9 +95,10 @@ def test_latest_migration_adds_knowledge_to_schema_1_5(tmp_path: Path) -> None:
     migrate_to_latest(source)
     config = ConfigLoader().load([source]).value
 
-    assert config.schema_version == "1.8"
+    assert config.schema_version == "1.9"
     assert config.knowledge is not None
     assert config.knowledge.selection_order["literal"] == ("literal-native",)
+    assert config.team_effectiveness is not None
 
 
 def test_latest_migration_discriminates_legacy_local_storage(tmp_path: Path) -> None:
@@ -108,6 +113,22 @@ def test_latest_migration_discriminates_legacy_local_storage(tmp_path: Path) -> 
     migrated = yaml.safe_load(source.read_text(encoding="utf-8"))
     config = ConfigLoader().load([source]).value
 
-    assert config.schema_version == "1.8"
+    assert config.schema_version == "1.9"
     assert migrated["persistence"]["kind"] == "sqlite"
     assert migrated["artifacts"]["kind"] == "filesystem"
+    assert config.team_effectiveness is not None
+
+
+def test_latest_migration_adds_team_effectiveness_to_schema_1_8(tmp_path: Path) -> None:
+    source = tmp_path / "config.yaml"
+    document = yaml.safe_load(preset_text("local"))
+    document["schema_version"] = "1.8"
+    document.pop("team_effectiveness")
+    source.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+
+    migrate_to_latest(source)
+    config = ConfigLoader().load([source]).value
+
+    assert config.schema_version == "1.9"
+    assert config.team_effectiveness is not None
+    assert config.team_effectiveness.evaluation_cadence_events > 0

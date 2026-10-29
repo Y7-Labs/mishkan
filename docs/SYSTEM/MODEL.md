@@ -1,9 +1,9 @@
 # MISHKAN System Model
 
-**Status:** Accepted by D-037 on 2026-08-25
-**Version:** 1.3
-**Derived from:** PRD 1.4, SRS 1.6, System Contract 1.4, and Responsibility Map 1.2 accepted by
-D-032–D-034
+**Status:** Accepted by D-037; amended by D-051 on 2026-10-29
+**Version:** 1.4
+**Derived from:** PRD 1.5, SRS 1.7, System Contract 1.5, and Responsibility Map 1.3 accepted by
+D-051
 
 ## 1. Purpose and modeling discipline
 
@@ -177,6 +177,45 @@ sequenceDiagram
 
 The Mission Lead is a temporary responsibility assigned to one of the 59 identities. Tools and
 skills are selected later for exact tasks; professional identity never implies ambient capability.
+
+### 6.1 Smallest sufficient crew, health, and adaptation
+
+**Question:** How does a Mission Crew improve without a hidden score or enlarged authority?
+
+```mermaid
+sequenceDiagram
+    participant C as CrewAI coordination (RSP-008)
+    participant M as Mission governance (RSP-022)
+    participant Q as Independent evaluation (RSP-009)
+    participant L as Professional learning (RSP-026)
+    participant PM
+    participant CTO
+    C->>M: attributable composition proposal, alternatives, collaboration rationale
+    M->>M: deterministic competence, availability, authority, conflict, independence gates
+    PM->>M: confirm product fit and formal composition
+    CTO->>M: confirm technical, security, quality, and assurance coverage
+    M->>M: persist smallest sufficient shape and collaboration-plan revision
+    loop bounded deterministic collection
+        M->>M: record flow, handoff, drift, duplication, risk, workload, and cost signals
+    end
+    M->>Q: milestone interval, evidence cursor, dimensions, and immutable references
+    Q-->>M: healthy, attention, blocked, or uncertain with confidence and limitations
+    alt correction stays within accepted membership and authority
+        M->>M: persist bounded adaptation and affected task changes
+    else material boundary changes
+        M->>PM: request composition or scope decision
+        M->>CTO: request independence, authority, or risk decision
+    end
+    M->>L: retrospective proposals and explicitly non-promoted findings
+    L-->>M: governed learning lifecycle outcome; no automatic profile change
+```
+
+A `single_owner` shape is valid and preferred when collaboration has no justified value. A
+`consultative` or `multi_producer` shape requires explicit benefit from expertise, independence,
+parallelism, context separation, or assurance. Collaboration history is a cited projection from
+accepted missions; it can inform the proposal but current mission fit can always displace it.
+Uncertainty, dissent, failure, and requests for help remain first-class evidence and do not model
+agent emotions.
 
 ## 7. Production, independent evaluation, reporting, and acceptance
 
@@ -595,7 +634,12 @@ semantics.
 7. Read models and live streams may lag; commands validate against authoritative current state.
 8. The accepted structural direction remains a transactional modular monolith with an outbox, not
    full event sourcing or service-first decomposition.
+9. Collaboration plans, health evaluations, adaptation decisions, and retrospective metadata are
+   authoritative mission records; collaboration history is only a derived projection.
+10. Deterministic health signals do not synchronously invoke a model on task completion. Independent
+    interpretation occurs at milestones and settles as uncertain when evaluation fails.
 
 These conclusions supersede the version 1.1 behavior amendment and the version 1.2 model detail
-under D-035. D-037 accepts the version 1.3 mission-environment detail. Implementation authority is
-governed separately by D-036 and the accepted increment gates.
+under D-035. D-037 accepts the version 1.3 mission-environment detail. D-051 accepts the version 1.4
+high-performance Mission Crew amendment. Implementation authority is governed separately by D-036
+and the accepted increment gates.

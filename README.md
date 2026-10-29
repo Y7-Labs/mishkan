@@ -104,7 +104,7 @@ CLI · Python SDK · HTTP/SSE · MCP bridge
 
 | Area | Implemented surface |
 |---|---|
-| Organization and missions | 59 versioned professional identities, contextual Mission Crews, PM/CTO governance, accountable assignments, independent assurance, durable conversations, scoped escalations, governed CEO interventions, and evidence-based professional evolution |
+| Organization and missions | 59 versioned professional identities, smallest-sufficient contextual Mission Crews, PM/CTO governance, explicit collaboration plans, multidimensional health evidence, bounded adaptation, governed retrospectives, independent assurance, durable conversations, scoped escalations, governed CEO interventions, and evidence-based professional evolution |
 | Repository work | Scoped file reads and search, direct processes, Bash, exact change sets, and governed Git effects |
 | Long-running work | PTY sessions and managed jobs with cursors, signals, cancellation, settlement, and recovery evidence |
 | Control plane | Loopback HTTP API, idempotent commands, SQLite/WAL, explicit Alembic migrations, snapshots, JSONL export, and resumable SSE |

@@ -1,5 +1,107 @@
 {
   "$defs": {
+    "CollaborationEdge": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_contracts": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Artifact Contracts",
+          "type": "array"
+        },
+        "interaction": {
+          "$ref": "#/$defs/CollaborationInteraction"
+        },
+        "purpose": {
+          "maxLength": 4096,
+          "minLength": 3,
+          "title": "Purpose",
+          "type": "string"
+        },
+        "source_identity": {
+          "maxLength": 128,
+          "minLength": 2,
+          "title": "Source Identity",
+          "type": "string"
+        },
+        "target_identity": {
+          "maxLength": 128,
+          "minLength": 2,
+          "title": "Target Identity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_identity",
+        "target_identity",
+        "interaction",
+        "purpose"
+      ],
+      "title": "CollaborationEdge",
+      "type": "object"
+    },
+    "CollaborationInteraction": {
+      "enum": [
+        "delegate",
+        "collaborate",
+        "consult",
+        "handoff",
+        "challenge",
+        "evaluate"
+      ],
+      "title": "CollaborationInteraction",
+      "type": "string"
+    },
+    "CrewAICollaborationProposal": {
+      "additionalProperties": false,
+      "description": "Attributable CrewAI proposal; MISHKAN still validates and authorizes it.",
+      "properties": {
+        "alternatives": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Alternatives",
+          "type": "array"
+        },
+        "collaboration_reasons": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Collaboration Reasons",
+          "type": "array"
+        },
+        "interactions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CollaborationEdge"
+          },
+          "title": "Interactions",
+          "type": "array"
+        },
+        "production_owner_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Production Owner Ids",
+          "type": "array"
+        },
+        "production_shape": {
+          "$ref": "#/$defs/ProductionShape"
+        }
+      },
+      "required": [
+        "production_shape",
+        "production_owner_ids",
+        "alternatives"
+      ],
+      "title": "CrewAICollaborationProposal",
+      "type": "object"
+    },
     "CrewAssignmentKind": {
       "enum": [
         "production",
@@ -143,6 +245,15 @@
       ],
       "title": "MissionCrewMember",
       "type": "object"
+    },
+    "ProductionShape": {
+      "enum": [
+        "single_owner",
+        "consultative",
+        "multi_producer"
+      ],
+      "title": "ProductionShape",
+      "type": "string"
     }
   },
   "additionalProperties": false,
@@ -154,6 +265,17 @@
       },
       "title": "Alternatives",
       "type": "array"
+    },
+    "approved_collaboration": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CrewAICollaborationProposal"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "approved_members": {
       "items": {

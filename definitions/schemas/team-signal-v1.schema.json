@@ -1,0 +1,89 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "collaboration_plan_version": {
+      "minimum": 1,
+      "title": "Collaboration Plan Version",
+      "type": "integer"
+    },
+    "evidence_references": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Evidence References",
+      "type": "array"
+    },
+    "kind": {
+      "enum": [
+        "blocked_time",
+        "queue_time",
+        "rejection",
+        "rework",
+        "duplicate_work",
+        "overlapping_work",
+        "missing_handoff",
+        "repaired_handoff",
+        "dependency_drift",
+        "context_drift",
+        "workload_concentration",
+        "unacknowledged_risk",
+        "coordination_cost",
+        "model_cost",
+        "tool_cost"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "mission_id": {
+      "format": "uuid",
+      "title": "Mission Id",
+      "type": "string"
+    },
+    "observed_at": {
+      "format": "date-time",
+      "title": "Observed At",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "signal_id": {
+      "format": "uuid",
+      "title": "Signal Id",
+      "type": "string"
+    },
+    "task_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Task Ids",
+      "type": "array"
+    },
+    "unit": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Unit",
+      "type": "string"
+    },
+    "value": {
+      "minimum": 0,
+      "title": "Value",
+      "type": "number"
+    }
+  },
+  "required": [
+    "mission_id",
+    "collaboration_plan_version",
+    "kind",
+    "task_ids",
+    "value",
+    "unit",
+    "evidence_references"
+  ],
+  "title": "TeamSignal",
+  "type": "object"
+}

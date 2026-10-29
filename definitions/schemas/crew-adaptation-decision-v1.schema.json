@@ -1,0 +1,171 @@
+{
+  "$defs": {
+    "AdaptationDisposition": {
+      "enum": [
+        "bounded",
+        "approval_required"
+      ],
+      "title": "AdaptationDisposition",
+      "type": "string"
+    },
+    "AdaptationKind": {
+      "enum": [
+        "repair_context",
+        "request_consultation",
+        "request_challenge",
+        "split_task",
+        "combine_tasks",
+        "reduce_parallelism",
+        "reassign_within_crew",
+        "pause_dependent_work",
+        "add_crew_member",
+        "change_independence",
+        "change_material_scope",
+        "expand_authority",
+        "accept_consequential_risk"
+      ],
+      "title": "AdaptationKind",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "adaptation_kinds": {
+      "items": {
+        "$ref": "#/$defs/AdaptationKind"
+      },
+      "minItems": 1,
+      "title": "Adaptation Kinds",
+      "type": "array"
+    },
+    "affected_assignments": {
+      "default": [],
+      "items": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "title": "Affected Assignments",
+      "type": "array"
+    },
+    "affected_task_ids": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Affected Task Ids",
+      "type": "array"
+    },
+    "after_crew_version": {
+      "minimum": 1,
+      "title": "After Crew Version",
+      "type": "integer"
+    },
+    "after_plan_version": {
+      "minimum": 1,
+      "title": "After Plan Version",
+      "type": "integer"
+    },
+    "approval_references": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Approval References",
+      "type": "array"
+    },
+    "authority_basis": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Authority Basis",
+      "type": "array"
+    },
+    "before_crew_version": {
+      "minimum": 1,
+      "title": "Before Crew Version",
+      "type": "integer"
+    },
+    "before_plan_version": {
+      "minimum": 1,
+      "title": "Before Plan Version",
+      "type": "integer"
+    },
+    "considered_alternatives": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Considered Alternatives",
+      "type": "array"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "decided_by": {
+      "maxLength": 128,
+      "minLength": 2,
+      "title": "Decided By",
+      "type": "string"
+    },
+    "decision_id": {
+      "format": "uuid",
+      "title": "Decision Id",
+      "type": "string"
+    },
+    "detected_condition": {
+      "maxLength": 8192,
+      "minLength": 3,
+      "title": "Detected Condition",
+      "type": "string"
+    },
+    "disposition": {
+      "$ref": "#/$defs/AdaptationDisposition"
+    },
+    "evidence_references": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Evidence References",
+      "type": "array"
+    },
+    "expected_benefit": {
+      "maxLength": 4096,
+      "minLength": 3,
+      "title": "Expected Benefit",
+      "type": "string"
+    },
+    "mission_id": {
+      "format": "uuid",
+      "title": "Mission Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "mission_id",
+    "detected_condition",
+    "considered_alternatives",
+    "expected_benefit",
+    "adaptation_kinds",
+    "affected_task_ids",
+    "authority_basis",
+    "disposition",
+    "before_crew_version",
+    "after_crew_version",
+    "before_plan_version",
+    "after_plan_version",
+    "evidence_references",
+    "decided_by"
+  ],
+  "title": "CrewAdaptationDecision",
+  "type": "object"
+}

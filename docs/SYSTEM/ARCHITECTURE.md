@@ -1,8 +1,8 @@
 # MISHKAN Architecture
 
-**Status:** Accepted by D-037 on 2026-08-25
-**Version:** 1.3
-**Derived from:** System Model 1.3 accepted by D-037 and Responsibility Map 1.2 accepted by D-034,
+**Status:** Accepted by D-037; amended by D-051 on 2026-10-29
+**Version:** 1.4
+**Derived from:** System Model 1.4 and Responsibility Map 1.3 accepted by D-051,
 plus retained decisions D-015, D-016, D-021, D-022, and D-029
 
 ## 1. Scope and non-negotiable boundaries
@@ -87,6 +87,7 @@ flowchart TB
     API["Application interfaces and identity"]
     Org["Organization definitions"]
     Mission["Mission governance"]
+    Teams["Collaboration plans and team effectiveness"]
     Conversation["Conversations and interventions"]
     Planning["Context and planning"]
     Policy["Policy and approvals"]
@@ -107,6 +108,9 @@ flowchart TB
     API --> Mission
     Mission --> Org
     Mission --> Conversation
+    Mission --> Teams
+    Teams -->|"milestone evidence"| Quality
+    Teams -->|"bounded adaptation"| Mission
     Mission --> Planning
     Mission -->|"bounded clarification and planning"| Crew
     Crew -->|"candidate Brief and plan"| Mission
@@ -139,9 +143,9 @@ flowchart TB
 | Execution-context evidence and planning | RSP-004–005 | repository/greenfield context and plan revisions |
 | Policy and approvals | RSP-006 | decision authority |
 | Organization definitions | RSP-007 | profiles, branches, explicit pools, templates |
-| Mission application component | RSP-022 | separate mission-governance and conversation/intervention modules under one primary owner |
+| Mission application component | RSP-022 | mission governance, collaboration plans, deterministic team signals, bounded adaptation, retrospectives, and separate conversation/intervention modules under one primary owner |
 | Direct CrewAI integration | RSP-008 | production coordination boundary |
-| Evaluation, reporting, and acceptance | RSP-009–010 | independent assurance and deterministic acceptance |
+| Evaluation, reporting, and acceptance | RSP-009–010 | independent assurance, milestone team-health interpretation, and deterministic acceptance |
 | Effect and security gateway | RSP-011–012 | separate enforcement, native-capability/session adapters, and content-security modules |
 | Attributed knowledge | RSP-013 | knowledge routing and provenance |
 | Skill lifecycle and use | RSP-014, RSP-020 | skill catalogue, selection, learning, and lifecycle |
@@ -153,7 +157,7 @@ flowchart TB
 | Artifacts and working references | RSP-023 | immutable content metadata, CAS references, and recovery |
 | MCP and harness mediation | RSP-024 | MCP client/server and external-client application translation |
 | Mission environment, engine, and pack resolution | RSP-025 | observed eligibility, proposal compatibility, verified bindings, descriptor-adapter resolution, location-bound verification, and materialization evidence |
-| Professional evolution | RSP-026 | scoped competence and profile evidence |
+| Professional evolution | RSP-026 | scoped competence and profile evidence; team aggregates never change profiles directly |
 
 Native file, edit, process, Bash, PTY, job, Web, and Browser adapters remain distinct modules behind
 RSP-011; artifact operations terminate at RSP-023. These modules do not own policy or become
@@ -171,6 +175,13 @@ Queries use bounded projections and identify their cursor or snapshot version. S
 durable cursor and makes gaps explicit. A projection may lag and is never used as authorization
 state. The STDIO MCP bridge translates transport messages into the same HTTP/application contract;
 it does not cache authoritative mission or policy state.
+
+The mission component stores versioned collaboration plans, immutable health evaluations,
+adaptation decisions, and retrospective metadata through the same application transaction and
+outbox boundary. It derives collaboration-history projections from accepted mission evidence rather
+than maintaining a second registry. Deterministic signal collection is event-driven and bounded;
+model-backed interpretation is dispatched as an independent CrewAI evaluation task at milestones,
+never inside the task-completion transaction.
 
 ## 5. CrewAI integration boundary
 
@@ -414,5 +425,6 @@ generated files grant no authority.
 ## 10. Gate effect
 
 System Model 1.2 and Architecture 1.2 superseded the version 1.1 amendments and D-030 under D-035;
-D-037 now accepts the version 1.3 mission-environment detail. Architecture alone grants no effect
-authority; D-036 resumes I02 under the accepted plan, policy, and increment gates.
+D-037 accepted the version 1.3 mission-environment detail. D-051 accepts the version 1.4 Mission
+Crew effectiveness amendment. Architecture alone grants no effect authority; implementation
+continues only under the accepted plan, policy, and increment gates.

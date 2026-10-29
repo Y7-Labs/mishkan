@@ -1,9 +1,9 @@
 # MISHKAN System Contract and Invariants
 
-**Status:** Accepted by D-033 on 2026-08-25
-**Version:** 1.4
+**Status:** Accepted by D-033; amended by D-051 on 2026-10-29
+**Version:** 1.5
 **Sequence:** SWE-BASICS-BEFORE-CODE 03
-**Derived from:** PRD 1.4 and SRS 1.6 accepted by D-032
+**Derived from:** PRD 1.5 and SRS 1.7 accepted by D-051
 
 ## 1. Contract boundary
 
@@ -210,6 +210,14 @@ remain distinct, and only compatible fallbacks may run with an explicit degradat
 environment-dependent mission carries a versioned decision that either binds verified existing
 state, selects authorized native execution, produces governed reproducible descriptors, proposes a
 project change, or identifies the unresolved dependency without fabricating readiness.
+
+### CTR-021 — Evidence-based Mission Crew effectiveness
+
+MISHKAN forms the smallest sufficient production shape, records an explicit collaboration plan,
+preserves epistemically safe reporting, derives bounded deterministic health signals, and uses
+independent milestone evaluation and governed retrospectives. Collaboration history is cited and
+contextual rather than authoritative. Bounded adaptations cannot enlarge crew, independence,
+scope, authority, or accepted risk without the applicable PM/CTO or CEO decision.
 
 ## 7. Integrity invariants
 
@@ -459,6 +467,36 @@ successful generation proves neither adapter compatibility, authorization, succe
 materialization, runtime readiness, project acceptance, nor task completion. Only location-bound
 verification evidence can satisfy the corresponding mission dependency.
 
+### INV-043 — Smallest sufficient crew
+
+Multi-agent production requires a durable collaboration rationale and PM/CTO-confirmed CrewAI
+proposal after deterministic eligibility gates. No universal team size, workflow, role/tool matrix,
+or hidden numeric ranking decides composition.
+
+### INV-044 — Epistemic-safety preservation
+
+Uncertainty, dissent, contradictory evidence, help requests, and failure reports remain attributable
+mission evidence. Their truthful reporting cannot by itself reduce professional-profile competence,
+and no producer or manager may replace them with a more favorable account before evaluation.
+
+### INV-045 — Multidimensional health integrity
+
+Team health preserves its dimensions, source interval, evidence cursor, evaluator, confidence, and
+limitations. No composite score, leaderboard, quota, activity proxy, or evaluator failure may be
+presented as authoritative effectiveness; failure settles as `uncertain`.
+
+### INV-046 — Bounded adaptation authority
+
+Automatic adaptation remains within accepted members, plan, scope, independence, authority, and
+risk. A material boundary change uses the existing executive decision path and creates new crew and
+collaboration-plan revisions before dependent work becomes eligible.
+
+### INV-047 — Retrospective non-promotion
+
+A retrospective and collaboration-history projection are immutable evidence and proposals, not a
+second organization registry or promotion authority. Knowledge, skills, templates, and professional
+competence change only through their existing governed lifecycle.
+
 ## 8. Policy decision contract
 
 ### 8.1 Capability request
@@ -616,6 +654,14 @@ The durable communication domain distinguishes channel, message, command, decisi
 and intervention records. PM and CTO resolve ordinary disagreement within their declared authority;
 otherwise only dependent work pauses and the CEO receives an actionable escalation. Every accepted
 intervention records scope, reason, authority, effect, and resulting mission state.
+
+Before multi-agent production, mission governance records the smallest sufficient production shape
+and a collaboration plan. CrewAI authors the attributable composition proposal; deterministic gates
+validate competence, availability, authority, conflicts, and independence; PM and CTO confirm the
+selection. Health signals remain cheap and continuous, while independent model-backed evaluation
+occurs only at milestones. Collaboration history is a projection over accepted mission evidence,
+not another registry. Adaptations within already accepted membership and authority may be bounded;
+material boundary changes use the existing executive decision path.
 
 ## 12. Execution-session contract
 
@@ -786,9 +832,9 @@ are assigned only after the responsibility and architecture stages.
 |---|---|
 | Operating context and identity | SYS-001–007, PRJ-001–010, CTX-001–008 |
 | Adaptive planning and policy | PRJ-007–010, PLN-001–021, SAF-003–006 |
-| Organization and separation | ORG-001–016 |
-| Mission governance and communication | MSN-001–016 |
-| Execution and recovery | RUN-001–012 |
+| Organization and separation | ORG-001–019 |
+| Mission governance and communication | MSN-001–022 |
+| Execution and recovery | RUN-001–013 |
 | Enforcement and evidence | SAF-001–013, OBS-001–008 |
 | Knowledge | KNW-001–006 |
 | Skills and procedural memory | SKL-001–025 |

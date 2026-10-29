@@ -1,0 +1,187 @@
+{
+  "$defs": {
+    "RetrospectiveProposal": {
+      "additionalProperties": false,
+      "properties": {
+        "destination": {
+          "enum": [
+            "knowledge",
+            "skill",
+            "mission_template",
+            "professional_competence"
+          ],
+          "title": "Destination",
+          "type": "string"
+        },
+        "evidence_references": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence References",
+          "type": "array"
+        },
+        "lifecycle_state": {
+          "const": "proposed",
+          "default": "proposed",
+          "title": "Lifecycle State",
+          "type": "string"
+        },
+        "proposal_id": {
+          "format": "uuid",
+          "title": "Proposal Id",
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 8192,
+          "minLength": 3,
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "destination",
+        "summary",
+        "evidence_references"
+      ],
+      "title": "RetrospectiveProposal",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "authored_by": {
+      "maxLength": 128,
+      "minLength": 2,
+      "title": "Authored By",
+      "type": "string"
+    },
+    "collaboration_plan_version": {
+      "minimum": 1,
+      "title": "Collaboration Plan Version",
+      "type": "integer"
+    },
+    "contradictions": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Contradictions",
+      "type": "array"
+    },
+    "coordination_costs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Coordination Costs",
+      "type": "array"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "evidence_references": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Evidence References",
+      "type": "array"
+    },
+    "expected_outcomes": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Expected Outcomes",
+      "type": "array"
+    },
+    "failed_patterns": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Failed Patterns",
+      "type": "array"
+    },
+    "mission_id": {
+      "format": "uuid",
+      "title": "Mission Id",
+      "type": "string"
+    },
+    "non_promoted_findings": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Non Promoted Findings",
+      "type": "array"
+    },
+    "observed_outcomes": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Observed Outcomes",
+      "type": "array"
+    },
+    "proposals": {
+      "items": {
+        "$ref": "#/$defs/RetrospectiveProposal"
+      },
+      "title": "Proposals",
+      "type": "array"
+    },
+    "retrospective_id": {
+      "format": "uuid",
+      "title": "Retrospective Id",
+      "type": "string"
+    },
+    "rework": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Rework",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "successful_patterns": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Successful Patterns",
+      "type": "array"
+    },
+    "trigger": {
+      "enum": [
+        "mission_closure",
+        "major_failure",
+        "explicit_request"
+      ],
+      "title": "Trigger",
+      "type": "string"
+    }
+  },
+  "required": [
+    "mission_id",
+    "collaboration_plan_version",
+    "trigger",
+    "expected_outcomes",
+    "observed_outcomes",
+    "successful_patterns",
+    "failed_patterns",
+    "contradictions",
+    "rework",
+    "coordination_costs",
+    "proposals",
+    "non_promoted_findings",
+    "evidence_references",
+    "authored_by"
+  ],
+  "title": "MissionRetrospective",
+  "type": "object"
+}

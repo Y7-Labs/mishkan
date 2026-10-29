@@ -89,6 +89,7 @@ class MishkanInitializer:
             "1.6",
             "1.7",
             "1.8",
+            "1.9",
         }:
             raise MishkanError(
                 ErrorCode.VERSION,
@@ -155,7 +156,7 @@ class MishkanInitializer:
                     | frozenset({ContainerCommandAdapter.adapter_id})
                 ),
             )
-        if config.schema_version in {"1.3", "1.4", "1.5", "1.6", "1.7", "1.8"}:
+        if config.schema_version in {"1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9"}:
             artifact_config = config.artifacts
             if not isinstance(artifact_config, ArtifactConfig):
                 raise MishkanError(

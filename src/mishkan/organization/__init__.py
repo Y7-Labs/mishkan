@@ -3,6 +3,7 @@
 from mishkan.organization.evolution import (
     LearningScopeLevel,
     ProfessionalCompetenceState,
+    ProfessionalEvidenceAttribution,
     ProfessionalEvidenceKind,
     ProfessionalEvidenceOutcome,
     ProfessionalEvidenceRecord,
@@ -31,6 +32,7 @@ __all__ = [
     "OutcomeDefinition",
     "PoolDefinition",
     "ProfessionalCompetenceState",
+    "ProfessionalEvidenceAttribution",
     "ProfessionalEvidenceKind",
     "ProfessionalEvidenceOutcome",
     "ProfessionalEvidenceRecord",

@@ -712,6 +712,80 @@ class MissionCrewRow(Base):
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
 
 
+class MissionCollaborationPlanRow(Base):
+    __tablename__ = "mission_collaboration_plans"
+    __table_args__ = (UniqueConstraint("mission_id", "version"),)
+
+    plan_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    mission_id: Mapped[str] = mapped_column(ForeignKey("missions.id"), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    brief_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    crew_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    production_shape: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class TeamHealthEvaluationRow(Base):
+    __tablename__ = "team_health_evaluations"
+
+    evaluation_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    mission_id: Mapped[str] = mapped_column(ForeignKey("missions.id"), nullable=False)
+    collaboration_plan_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    evidence_cursor: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    evaluator_identity: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class CrewAdaptationDecisionRow(Base):
+    __tablename__ = "crew_adaptation_decisions"
+
+    decision_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    mission_id: Mapped[str] = mapped_column(ForeignKey("missions.id"), nullable=False)
+    before_plan_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    after_plan_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    disposition: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class MissionRetrospectiveRow(Base):
+    __tablename__ = "mission_retrospectives"
+
+    retrospective_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    mission_id: Mapped[str] = mapped_column(ForeignKey("missions.id"), nullable=False)
+    collaboration_plan_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    trigger: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class TeamSignalRow(Base):
+    __tablename__ = "team_signals"
+
+    signal_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    mission_id: Mapped[str] = mapped_column(ForeignKey("missions.id"), nullable=False)
+    collaboration_plan_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    observed_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class MissionHandoffRow(Base):
+    __tablename__ = "mission_handoffs"
+
+    handoff_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    mission_id: Mapped[str] = mapped_column(ForeignKey("missions.id"), nullable=False)
+    collaboration_plan_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    task_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    from_identity: Mapped[str] = mapped_column(String(128), nullable=False)
+    to_identity: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
 class ConversationChannelRow(Base):
     __tablename__ = "conversation_channels"
 
