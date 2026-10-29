@@ -254,6 +254,7 @@ from mishkan.workers.models import (
     WorkerRotationRequest,
     WorkerTaskClaim,
 )
+from mishkan.workers.recovery import WorkerLeaseRecoveryDriver
 from mishkan.workers.service import WorkerCoordinationService
 from mishkan.workers.transport import peer_certificate_der
 
@@ -510,6 +511,14 @@ def create_app(
             )
         )
         if distributed_config is not None
+        else None
+    )
+    worker_recovery = (
+        WorkerLeaseRecoveryDriver(
+            distributed_config.heartbeat_interval_seconds,
+            worker_coordination.expire,
+        )
+        if distributed_config is not None and worker_coordination is not None
         else None
     )
     repository = SQLiteApplicationRepository(
@@ -1512,12 +1521,16 @@ def create_app(
         try:
             if schedule_driver is not None:
                 schedule_driver.start()
+            if worker_recovery is not None:
+                worker_recovery.start()
             if mcp_http is None:
                 yield
                 return
             async with mcp_http.lifespan():
                 yield
         finally:
+            if worker_recovery is not None:
+                await worker_recovery.stop()
             if schedule_driver is not None:
                 await schedule_driver.stop()
             for task in telemetry_tasks:

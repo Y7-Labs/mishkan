@@ -210,6 +210,9 @@ class WorkerCoordinationService:
             effect_report=effect_report,
         )
 
+    def expire(self) -> tuple[UUID, ...]:
+        return self._repository.expire_leases()
+
     def authorize_input_artifact(self, worker_id: UUID, artifact_id: UUID) -> None:
         self._repository.authorize_input_artifact(worker_id, artifact_id)
 

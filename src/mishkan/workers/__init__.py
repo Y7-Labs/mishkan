@@ -39,6 +39,7 @@ from mishkan.workers.models import (
     WorkerTaskClaim,
 )
 from mishkan.workers.pki import WorkerCertificateAuthority
+from mishkan.workers.recovery import WorkerLeaseRecoveryDriver
 from mishkan.workers.repository import WorkerIdentityRepository
 from mishkan.workers.service import WorkerCoordinationService, WorkerEnrollmentService
 from mishkan.workers.state import WorkerCredentialPaths, WorkerCredentialStore, WorkerLocalIdentity
@@ -81,6 +82,7 @@ __all__ = [
     "WorkerIdentityRepository",
     "WorkerLease",
     "WorkerLeaseGrant",
+    "WorkerLeaseRecoveryDriver",
     "WorkerLeaseState",
     "WorkerLocalIdentity",
     "WorkerResourceSnapshot",
