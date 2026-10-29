@@ -123,18 +123,18 @@ def list_workers(
     offset: Annotated[int, typer.Option(min=0)] = 0,
     limit: Annotated[int, typer.Option(min=1, max=10_000)] = 100,
 ) -> None:
-    """List bounded worker identity projections."""
+    """List bounded worker identity, heartbeat, and availability projections."""
     with _daemon_client(ctx) as client:
-        identities = client.workers.list(offset=offset, limit=limit)
-    _emit(_dump_models(identities), as_json=_state(ctx).json_output)
+        statuses = client.workers.statuses(offset=offset, limit=limit)
+    _emit(_dump_models(statuses), as_json=_state(ctx).json_output)
 
 
 @worker_app.command("show")
 def show_worker(ctx: typer.Context, worker_id: UUID) -> None:
-    """Inspect one exact worker identity."""
+    """Inspect one exact worker identity, heartbeat, and availability state."""
     with _daemon_client(ctx) as client:
-        identity = client.workers.get(worker_id)
-    _emit(identity.model_dump(mode="json"), as_json=_state(ctx).json_output)
+        status = client.workers.status(worker_id)
+    _emit(status.model_dump(mode="json"), as_json=_state(ctx).json_output)
 
 
 @worker_app.command("revoke")
@@ -166,6 +166,23 @@ def place_worker_task(
     with _daemon_client(ctx) as client:
         placement = client.workers.place(request)
     _emit(placement.model_dump(mode="json"), as_json=_state(ctx).json_output)
+
+
+@worker_app.command("accept")
+def accept_worker_completion(
+    ctx: typer.Context,
+    completion_id: UUID,
+    result_file: Annotated[Path, typer.Option("--result")],
+    review_file: Annotated[Path, typer.Option("--review")],
+) -> None:
+    """Accept one delivered completion from independently validated contracts."""
+    from mishkan.planning.models import InitializationResult, ReviewDecision
+
+    result = _read_contract(result_file, InitializationResult, "--result")
+    review = _read_contract(review_file, ReviewDecision, "--review")
+    with _daemon_client(ctx) as client:
+        completion = client.workers.accept_completion(completion_id, result, review)
+    _emit(completion.model_dump(mode="json"), as_json=_state(ctx).json_output)
 
 
 @schedule_app.command("create")
