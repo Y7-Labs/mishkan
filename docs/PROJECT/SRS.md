@@ -1,14 +1,16 @@
 # MISHKAN Software Requirements Specification
 
-**Status:** Accepted by D-032 on 2026-08-25
-**Version:** 1.6
-**Derived from:** PRD 1.4 accepted by D-032
+**Status:** Accepted by D-032; amended by D-051 on 2026-10-29
+**Version:** 1.7
+**Derived from:** PRD 1.5 accepted by D-051
 **Normative vocabulary:** MUST, MUST NOT, SHOULD, MAY follow RFC 2119 meanings
 
 Version 1.6 replaces the historical 32-identity/15-outcome assumptions and promotes the validated
 mission, engineering-context, native-capability, artifact, MCP, harness, skills, communication,
 intervention, professional-evolution, and mission-scoped environment behavior in WD-001–WD-028.
 Version 1.5 decision-quality assistance and the 1.4 general-tool model remain incorporated.
+Version 1.7 adds smallest-sufficient crew formation, explicit collaboration plans, epistemic safety,
+multidimensional health evidence, bounded adaptation, retrospectives, and collaboration lineage.
 
 ## 1. Purpose and scope
 
@@ -365,6 +367,28 @@ Learned information MUST remain at the narrowest justified mission, project, age
 organization scope. Promotion to a broader scope MUST use a durable policy decision and preserve
 the supporting and contradictory evidence.
 
+### ORG-017 — Multidimensional team-effectiveness evidence
+
+The system MUST preserve independently attributable mission evidence for outcome and user value,
+quality and stability, flow and delivery, coordination efficiency, epistemic safety and common
+ground, adaptability and learning, and resource efficiency. It MUST NOT collapse these dimensions
+into a universal composite score, leaderboard, quota, or automatic professional-profile penalty.
+
+### ORG-018 — Contextual collaboration history
+
+The system MUST derive collaboration history only from accepted missions and immutable team
+evaluations. It MAY prefer a proven combination when mission context is directly comparable and
+evidence is recent and strong; MUST use partially comparable evidence only as a tie-breaker; and
+MUST ignore stale, conflicting, or materially different evidence. Every use MUST cite the project,
+mission, task, and evaluation evidence, and current mission fit MUST be able to displace history.
+
+### ORG-019 — Team evidence does not determine individual competence
+
+Aggregate team health, mission outcome, collaboration history, or retrospective findings MUST NOT
+automatically promote, demote, reward, penalize, or change the authority or independence of an
+individual profile. Any proposed professional learning MUST use the attributable evidence and
+governed promotion process in ORG-015–016.
+
 ## 7. Engineering context and reconnaissance
 
 ### CTX-001 — Layered engineering context
@@ -519,6 +543,60 @@ eligible, the mission plan MUST contain the agent-authored proposal required by 
 reference its compatible versioned binding resolved under ENG-009–013, or record the exact
 unresolved dependency and affected scope.
 
+### MSN-017 — Smallest sufficient production shape
+
+Before multi-agent production work becomes eligible, PM and CTO MUST record why collaboration is
+needed based on distinct expertise, independent authority, parallelizable work, context separation,
+or required assurance. The accepted production shape MUST be `single_owner`, `consultative`, or
+`multi_producer` and MUST be the smallest shape justified by the Mission Brief and current
+evidence. CrewAI MUST produce an attributable composition proposal and alternatives; PM and CTO
+MUST confirm the selected composition after deterministic competence, availability, authority,
+conflict, and independence gates pass.
+
+### MSN-018 — Versioned collaboration plan
+
+Every accepted Mission Crew MUST have a versioned collaboration plan tied to the Mission Brief and
+crew revisions. The plan MUST identify shared outcome and user impact, responsibilities, decision
+rights, typed interaction edges, bounded context and Artifact references, communication and
+resource budgets, escalation rules, permitted adaptations, and stop conditions. It MUST NOT encode
+a universal team size, workflow, or static role/tool matrix.
+
+### MSN-019 — Epistemic safety and complete handoffs
+
+The system MUST preserve uncertainty, dissent, contradictory evidence, requests for help, and
+failure reports without automatically penalizing an agent profile. A handoff MUST identify the
+completed result and Artifacts, decisions and changed assumptions, uncertainty and failures,
+unresolved questions, required next action, and acceptance conditions. A manager or producer MUST
+NOT rewrite or suppress negative evidence before independent evaluation.
+
+### MSN-020 — Continuous signals and independent health evaluation
+
+The system MUST collect bounded deterministic signals for blocked and queue time, repeated
+rejection or rework, duplicate or overlapping work, missing or repaired handoffs, dependency and
+context drift, workload concentration, unacknowledged risk, and coordination/model/tool cost.
+Independent milestone evaluation MUST interpret those signals across the dimensions in ORG-017
+and MUST return `healthy`, `attention`, `blocked`, or `uncertain` with evidence, limitations, and
+confidence. Task completion MUST NOT synchronously depend on a model-backed health evaluation, and
+evaluator failure MUST produce `uncertain` rather than a fabricated status.
+
+### MSN-021 — Bounded crew adaptation
+
+Within an accepted plan and policy, the system MAY repair missing context, request consultation or
+challenge, split or combine tasks, reduce harmful parallelism, reassign work among already approved
+crew members, or pause only dependent work. Adding a member, changing an independence boundary,
+altering material scope, expanding authority, or accepting consequential risk MUST follow the
+existing PM/CTO or CEO decision path. Every adaptation MUST preserve its detected condition,
+alternatives, expected benefit, affected tasks and assignments, authority basis, and before/after
+crew and plan revisions.
+
+### MSN-022 — Governed mission retrospective
+
+The system MUST create an immutable retrospective at mission closure, major failure, or explicit
+request. It MUST compare expected and observed outcomes, preserve successful and failed
+collaboration patterns, contradictions, rework, coordination cost, improvement proposals, and
+explicitly non-promoted findings. A retrospective MUST NOT promote knowledge, skills, mission
+templates, or professional competence by itself.
+
 ## 9. Run execution and recovery
 
 ### RUN-001 — Run lifecycle
@@ -578,6 +656,13 @@ accepted results, and produce a terminal audit record.
 
 The engineer MUST be able to observe run and task state changes as they occur and query the latest
 state after reconnecting.
+
+### RUN-013 — Collaboration execution lineage
+
+Every CrewAI delegation, consultation, challenge, handoff, evaluation, and accepted adaptation MUST
+record the collaboration-plan revision, participating identities, task, causal command or event,
+and immutable evidence references. Local and distributed execution MUST produce the same
+authoritative lineage contract.
 
 ## 10. Workspace and safety
 
@@ -1825,8 +1910,8 @@ matching template MUST NOT prevent a valid free-form mission.
 | PRD item | Principal SRS coverage |
 |---|---|
 | UC-01 Establish organization | PRJ-001–010, ORG-001–003 |
-| UC-02 Delegate objective | PLN-001–011, PLN-020–021, RUN-001–012 |
-| UC-03 Coordinate work | ORG-004–016, MSN-001–008, MSN-016, RUN-003–007 |
+| UC-02 Delegate objective | PLN-001–011, PLN-020–021, RUN-001–013 |
+| UC-03 Coordinate work | ORG-004–019, MSN-001–008, MSN-016–022, RUN-003–007, RUN-013 |
 | UC-04 Enforce authority | SAF-001–013 |
 | UC-05 Review evidence | MSN-009–015, OBS-001–008, RUN-012 |
 | UC-06 Survive interruption | RUN-008–011, OBS-003 |
@@ -1839,8 +1924,9 @@ matching template MUST NOT prevent a valid free-form mission.
 | UC-13 Converse, inspect, intervene | MSN-009–015, SYS-006 |
 | UC-14 Use external harness | MCP-001–009, SYS-006, TC-008 |
 | UC-15 Evolve professional capability | ORG-015–016, SKL-013–024 |
+| UC-16 Form and improve an effective Mission Crew | ORG-017–019, MSN-017–022, RUN-013 |
 | SC-01 Repository adaptation | CTX-001–008, PRJ-003–010, ORG-012 |
-| SC-02 End-to-end delegation | PLN-001–021, ORG-001–016, MSN-001–008, MSN-016, RUN-001–012 |
+| SC-02 End-to-end delegation | PLN-001–021, ORG-001–019, MSN-001–008, MSN-016–022, RUN-001–013 |
 | SC-03 Human control | SAF-003–013 |
 | SC-04 Recovery | RUN-008–010 |
 | SC-05 Degraded usefulness | KNW-005, WEB-007, ENG-008, ERR-DEP-001 |
@@ -1857,3 +1943,4 @@ matching template MUST NOT prevent a valid free-form mission.
 | SC-16 External harness integration | MCP-001–009, SYS-006, TC-008 |
 | SC-17 Artifact integrity | ART-001–008 |
 | SC-18 Evidence-based agent evolution | ORG-015–016, SKL-013–024, ART-001–008 |
+| SC-19 Adaptive Mission Crew effectiveness | ORG-017–019, MSN-017–022, RUN-013 |
