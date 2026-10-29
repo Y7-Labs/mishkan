@@ -1,4 +1,4 @@
-schema_version: "1.8"
+schema_version: "1.9"
 mode: cloud
 engineering_profile: package://mishkan.resources.environment/default.yaml
 engineering_pack_sources:
@@ -308,3 +308,30 @@ scheduling:
   retry_multiplier: 2.0
   retry_max_seconds: 300.0
   history_page_limit: 1000
+team_effectiveness:
+  evaluation_cadence_events: 100
+  evaluation_cadence_seconds: 3600
+  evidence_max_events: 5000
+  evidence_max_artifacts: 250
+  history_freshness_days: 180
+  max_history_candidates: 20
+  signal_thresholds:
+    blocked_time_seconds: 1800
+    queue_time_seconds: 1800
+    repeated_rejections: 2
+    duplicate_work: 1
+    missing_handoffs: 1
+    workload_share: 0.75
+  resource_budgets:
+    communication_messages: 200
+    coordination_model_tokens: 200000
+    coordination_tool_calls: 500
+  automatic_adaptations:
+    - repair_context
+    - request_consultation
+    - request_challenge
+    - split_task
+    - combine_tasks
+    - reduce_parallelism
+    - reassign_within_crew
+    - pause_dependent_work

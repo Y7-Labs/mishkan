@@ -1,0 +1,66 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "collaboration_plan_version": {
+      "minimum": 1,
+      "title": "Collaboration Plan Version",
+      "type": "integer"
+    },
+    "evaluator_identity": {
+      "maxLength": 128,
+      "minLength": 2,
+      "title": "Evaluator Identity",
+      "type": "string"
+    },
+    "evidence_cursor": {
+      "minimum": 0,
+      "title": "Evidence Cursor",
+      "type": "integer"
+    },
+    "evidence_references": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Evidence References",
+      "type": "array"
+    },
+    "interval_ended_at": {
+      "format": "date-time",
+      "title": "Interval Ended At",
+      "type": "string"
+    },
+    "interval_started_at": {
+      "format": "date-time",
+      "title": "Interval Started At",
+      "type": "string"
+    },
+    "mission_id": {
+      "format": "uuid",
+      "title": "Mission Id",
+      "type": "string"
+    },
+    "request_id": {
+      "format": "uuid",
+      "title": "Request Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "mission_id",
+    "collaboration_plan_version",
+    "interval_started_at",
+    "interval_ended_at",
+    "evidence_cursor",
+    "evaluator_identity",
+    "evidence_references"
+  ],
+  "title": "TeamHealthEvaluationRequest",
+  "type": "object"
+}

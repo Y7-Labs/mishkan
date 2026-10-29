@@ -23,14 +23,21 @@ from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.domain.identity import new_id
 from mishkan.domain.time import require_aware, utc_now
 from mishkan.missions import (
+    AdaptationKind,
+    CollaborationEdge,
+    CollaborationResponsibility,
+    CrewAssignmentKind,
     ExecutiveConfirmation,
     MissionBrief,
     MissionBriefStatus,
+    MissionCollaborationPlan,
     MissionCrewMember,
     MissionCrewRevision,
     MissionEnvironmentIntent,
     MissionRecord,
+    MissionResourceLimit,
     MissionTemplateService,
+    ProductionShape,
 )
 from mishkan.organization import OrganizationRosterDefinition, load_canonical_organization
 from mishkan.organization.models import RoleDefinition
@@ -45,6 +52,34 @@ class GovernanceOutput(BaseModel):
 class MissionGovernanceEvidence(GovernanceOutput):
     reference: str = Field(min_length=1, max_length=2_048)
     summary: str = Field(min_length=1, max_length=8_192)
+
+
+class CrewAICollaborationProposal(GovernanceOutput):
+    """Attributable CrewAI proposal; MISHKAN still validates and authorizes it."""
+
+    production_shape: ProductionShape
+    production_owner_ids: tuple[str, ...] = Field(min_length=1)
+    collaboration_reasons: tuple[str, ...] = ()
+    alternatives: tuple[str, ...] = Field(min_length=1)
+    interactions: tuple[CollaborationEdge, ...] = ()
+
+    @model_validator(mode="after")
+    def production_shape_is_explicit(self) -> CrewAICollaborationProposal:
+        owners = self.production_owner_ids
+        if len(owners) != len(set(owners)):
+            raise ValueError("collaboration proposal owners must be unique")
+        if self.production_shape is ProductionShape.MULTI_PRODUCER:
+            if len(owners) < 2 or not self.collaboration_reasons or not self.interactions:
+                raise ValueError(
+                    "multi-producer proposal requires owners, reasons, and interactions"
+                )
+        elif len(owners) != 1:
+            raise ValueError("single-owner and consultative proposals require one owner")
+        if self.production_shape is not ProductionShape.SINGLE_OWNER and not (
+            self.collaboration_reasons
+        ):
+            raise ValueError("multi-agent collaboration requires an explicit reason")
+        return self
 
 
 class MissionGovernanceRequest(GovernanceOutput):
@@ -86,6 +121,7 @@ class PMMissionProposal(GovernanceOutput):
     environment_intent: MissionEnvironmentIntent
     rationale: str = Field(min_length=3, max_length=4_096)
     evidence_references: tuple[str, ...] = Field(min_length=1)
+    collaboration: CrewAICollaborationProposal
 
 
 class CTOMissionReview(GovernanceOutput):
@@ -101,10 +137,13 @@ class CTOMissionReview(GovernanceOutput):
     pm_recommended_option_id: str | None = None
     cto_recommended_option_id: str | None = None
     independent_work_continuing: tuple[str, ...] = ()
+    approved_collaboration: CrewAICollaborationProposal | None = None
 
     @model_validator(mode="after")
     def rejection_is_actionable(self) -> CTOMissionReview:
         if self.disposition == "confirmed":
+            if self.approved_collaboration is None:
+                raise ValueError("confirmed CTO review requires an approved collaboration proposal")
             normalized = " ".join(self.coverage).lower()
             missing = {
                 required
@@ -123,6 +162,8 @@ class CTOMissionReview(GovernanceOutput):
                     "and operability"
                 )
             return self
+        if self.approved_collaboration is not None:
+            raise ValueError("rejected CTO review cannot approve a collaboration proposal")
         option_ids = {item.option_id for item in self.alternatives}
         if (
             not self.unresolved_findings
@@ -180,17 +221,68 @@ class MissionGovernanceResult(GovernanceOutput):
     brief: MissionBrief
     crew: MissionCrewRevision | None
     disagreement: MissionGovernanceDisagreement | None = None
+    collaboration: CrewAICollaborationProposal | None = None
     lineage: CrewAIGovernanceLineage
 
     @model_validator(mode="after")
     def disposition_matches_payload(self) -> MissionGovernanceResult:
-        if self.disposition == "agreed" and (self.crew is None or self.disagreement is not None):
+        if self.disposition == "agreed" and (
+            self.crew is None or self.disagreement is not None or self.collaboration is None
+        ):
             raise ValueError("agreed governance requires a crew and no disagreement")
         if self.disposition == "disagreement" and (
-            self.crew is not None or self.disagreement is None
+            self.crew is not None or self.disagreement is None or self.collaboration is not None
         ):
             raise ValueError("governance disagreement requires escalation data and no crew")
         return self
+
+    def collaboration_plan(
+        self,
+        *,
+        version: int,
+        context_references: tuple[str, ...],
+        artifact_references: tuple[str, ...],
+        resource_budgets: tuple[MissionResourceLimit, ...],
+        communication_budget: MissionResourceLimit,
+        permitted_adaptations: tuple[AdaptationKind, ...],
+        stop_conditions: tuple[str, ...],
+        user_impact: str,
+    ) -> MissionCollaborationPlan:
+        if self.crew is None or self.collaboration is None:
+            raise ValueError("governance disagreement cannot create a collaboration plan")
+        responsibilities = tuple(
+            CollaborationResponsibility(
+                identity_id=member.identity_id,
+                responsibility=member.responsibility,
+                decision_rights=(f"assignment:{member.assignment_kind.value}",),
+            )
+            for member in self.crew.members
+        )
+        return MissionCollaborationPlan(
+            mission_id=self.mission.mission_id,
+            version=version,
+            brief_version=self.brief.version,
+            crew_version=self.crew.version,
+            production_shape=self.collaboration.production_shape,
+            production_owner_ids=self.collaboration.production_owner_ids,
+            collaboration_reasons=self.collaboration.collaboration_reasons,
+            proposal_author_identity="PM",
+            crewai_coordination_reference=str(self.lineage.coordination_id),
+            alternatives=self.collaboration.alternatives,
+            shared_outcome=self.brief.desired_outcome,
+            user_impact=user_impact,
+            responsibilities=responsibilities,
+            interactions=self.collaboration.interactions,
+            context_references=context_references,
+            artifact_references=artifact_references,
+            resource_budgets=resource_budgets,
+            communication_budget=communication_budget,
+            escalation_conditions=self.brief.escalation_conditions,
+            permitted_adaptations=permitted_adaptations,
+            stop_conditions=stop_conditions,
+            pm_confirmation_id=self.crew.pm_composition_confirmation_id,
+            cto_confirmation_id=self.crew.cto_coverage_confirmation_id,
+        )
 
     def escalation(self, conversation_id: UUID) -> MissionEscalation:
         if self.disagreement is None:
@@ -284,6 +376,35 @@ class CrewAIMissionGovernanceRunner:
             raise MishkanError(
                 ErrorCode.MISSION,
                 "PM and CTO did not confirm the same Mission Crew composition",
+            )
+        if cto.disposition == "confirmed" and cto.approved_collaboration != pm.collaboration:
+            raise MishkanError(
+                ErrorCode.MISSION,
+                "PM and CTO did not confirm the same collaboration proposal",
+            )
+        collaboration_identities = {
+            *pm.collaboration.production_owner_ids,
+            *(edge.source_identity for edge in pm.collaboration.interactions),
+            *(edge.target_identity for edge in pm.collaboration.interactions),
+        }
+        if unknown_collaborators := collaboration_identities - set(proposed):
+            raise MishkanError(
+                ErrorCode.ROLE_CONFLICT,
+                "collaboration proposal references identities outside the proposed crew",
+                details={"unknown": sorted(unknown_collaborators)},
+            )
+        approved_producers = {
+            member.identity_id
+            for member in cto.approved_members
+            if member.assignment_kind
+            in {CrewAssignmentKind.PRODUCTION, CrewAssignmentKind.CONTRIBUTOR}
+        }
+        if cto.disposition == "confirmed" and not set(
+            pm.collaboration.production_owner_ids
+        ).issubset(approved_producers):
+            raise MishkanError(
+                ErrorCode.ROLE_CONFLICT,
+                "collaboration production owners lack a production assignment",
             )
         known = {item.identity_id for item in self._organization.identities}
         if unknown := set(proposed) - known:
@@ -391,6 +512,7 @@ class CrewAIMissionGovernanceRunner:
                 brief=brief,
                 crew=None,
                 disagreement=disagreement,
+                collaboration=None,
                 lineage=lineage,
             )
         crew = MissionCrewRevision(
@@ -411,6 +533,7 @@ class CrewAIMissionGovernanceRunner:
             brief=brief,
             crew=crew,
             disagreement=None,
+            collaboration=pm.collaboration,
             lineage=lineage,
         )
 

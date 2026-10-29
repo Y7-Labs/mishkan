@@ -30,6 +30,7 @@ class DaemonPaths:
             "1.6",
             "1.7",
             "1.8",
+            "1.9",
         } or not all((config.daemon, config.persistence, config.artifacts, config.sessions)):
             raise MishkanError(
                 ErrorCode.VERSION,

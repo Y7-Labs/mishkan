@@ -2310,6 +2310,94 @@
       "title": "SkillsConfig",
       "type": "object"
     },
+    "TeamEffectivenessConfig": {
+      "additionalProperties": false,
+      "description": "Public cadence, bounds, and adaptation policy inputs for Mission Crew evidence.",
+      "properties": {
+        "automatic_adaptations": {
+          "items": {
+            "enum": [
+              "repair_context",
+              "request_consultation",
+              "request_challenge",
+              "split_task",
+              "combine_tasks",
+              "reduce_parallelism",
+              "reassign_within_crew",
+              "pause_dependent_work"
+            ],
+            "type": "string"
+          },
+          "title": "Automatic Adaptations",
+          "type": "array"
+        },
+        "evaluation_cadence_events": {
+          "maximum": 1000000,
+          "minimum": 1,
+          "title": "Evaluation Cadence Events",
+          "type": "integer"
+        },
+        "evaluation_cadence_seconds": {
+          "maximum": 2592000,
+          "minimum": 1,
+          "title": "Evaluation Cadence Seconds",
+          "type": "integer"
+        },
+        "evidence_max_artifacts": {
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Evidence Max Artifacts",
+          "type": "integer"
+        },
+        "evidence_max_events": {
+          "maximum": 1000000,
+          "minimum": 1,
+          "title": "Evidence Max Events",
+          "type": "integer"
+        },
+        "history_freshness_days": {
+          "maximum": 36500,
+          "minimum": 1,
+          "title": "History Freshness Days",
+          "type": "integer"
+        },
+        "max_history_candidates": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Max History Candidates",
+          "type": "integer"
+        },
+        "resource_budgets": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "minProperties": 1,
+          "title": "Resource Budgets",
+          "type": "object"
+        },
+        "signal_thresholds": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "minProperties": 1,
+          "title": "Signal Thresholds",
+          "type": "object"
+        }
+      },
+      "required": [
+        "evaluation_cadence_events",
+        "evaluation_cadence_seconds",
+        "evidence_max_events",
+        "evidence_max_artifacts",
+        "history_freshness_days",
+        "max_history_candidates",
+        "signal_thresholds",
+        "resource_budgets",
+        "automatic_adaptations"
+      ],
+      "title": "TeamEffectivenessConfig",
+      "type": "object"
+    },
     "TelemetryConfig": {
       "additionalProperties": false,
       "properties": {
@@ -2998,6 +3086,17 @@
       "anyOf": [
         {
           "$ref": "#/$defs/SkillsConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "team_effectiveness": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TeamEffectivenessConfig"
         },
         {
           "type": "null"

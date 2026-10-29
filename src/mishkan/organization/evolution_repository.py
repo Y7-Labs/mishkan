@@ -12,6 +12,7 @@ from mishkan.domain.identity import new_id
 from mishkan.domain.time import utc_now
 from mishkan.organization.evolution import (
     ProfessionalCompetenceState,
+    ProfessionalEvidenceAttribution,
     ProfessionalEvidenceKind,
     ProfessionalEvidenceOutcome,
     ProfessionalEvidenceRecord,
@@ -134,11 +135,13 @@ class SQLiteProfessionalEvolutionRepository:
                 for item in support
                 if item.outcome is ProfessionalEvidenceOutcome.DEMONSTRATED
                 and item.fresh_until > now
+                and item.attribution is ProfessionalEvidenceAttribution.INDIVIDUAL_RESULT
             )
             if disposition is ProfessionalPromotionDisposition.ACCEPTED and not demonstrable:
                 raise MishkanError(
                     ErrorCode.AUTHORIZATION_MISSING,
-                    "accepted professional promotion requires fresh demonstrated evidence",
+                    "accepted professional promotion requires fresh individually attributed "
+                    "demonstrated evidence",
                 )
             contradictory = tuple(
                 item.evidence_id
@@ -263,6 +266,7 @@ class SQLiteProfessionalEvolutionRepository:
                 item.evidence_id
                 for item in demonstrated
                 if item.fresh_until > freshness_evaluated_at
+                and item.attribution is ProfessionalEvidenceAttribution.INDIVIDUAL_RESULT
             )
             stale_support = tuple(
                 item.evidence_id

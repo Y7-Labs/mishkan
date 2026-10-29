@@ -829,6 +829,95 @@ def record_mission_crew(
     _emit(result.model_dump(mode="json"), as_json=_state(ctx).json_output)
 
 
+@mission_app.command("collaboration")
+def mission_collaboration(
+    ctx: typer.Context,
+    mission_id: str,
+    record_file: Annotated[Path | None, typer.Option("--record")] = None,
+    version: Annotated[int | None, typer.Option(min=1)] = None,
+) -> None:
+    """Show or record the versioned collaboration plan for a Mission Crew."""
+    from mishkan.missions import MissionCollaborationPlan
+
+    with _daemon_client(ctx) as client:
+        if record_file is None:
+            result = client.mission_collaboration(mission_id, version=version)
+        else:
+            plan = _read_contract(record_file, MissionCollaborationPlan, "--record")
+            if str(plan.mission_id) != mission_id:
+                raise typer.BadParameter("collaboration plan belongs to another mission")
+            result = client.record_mission_collaboration(plan)
+    _emit(result.model_dump(mode="json"), as_json=_state(ctx).json_output)
+
+
+@mission_app.command("health")
+def mission_health(
+    ctx: typer.Context,
+    mission_id: str,
+    record_file: Annotated[Path | None, typer.Option("--record")] = None,
+    evaluate_file: Annotated[Path | None, typer.Option("--evaluate")] = None,
+    limit: Annotated[int, typer.Option(min=1, max=1_000)] = 100,
+) -> None:
+    """List or record independent multidimensional team-health evidence."""
+    from mishkan.missions import TeamHealthEvaluation, TeamHealthEvaluationRequest
+
+    if record_file is not None and evaluate_file is not None:
+        raise typer.BadParameter("--record and --evaluate are mutually exclusive")
+
+    with _daemon_client(ctx) as client:
+        if record_file is None and evaluate_file is None:
+            records = client.mission_health(mission_id, limit=limit)
+            payload: object = _dump_models(records)
+        elif record_file is not None:
+            evaluation = _read_contract(record_file, TeamHealthEvaluation, "--record")
+            if str(evaluation.mission_id) != mission_id:
+                raise typer.BadParameter("team-health evaluation belongs to another mission")
+            payload = client.record_team_health(evaluation).model_dump(mode="json")
+        else:
+            assert evaluate_file is not None
+            request = _read_contract(evaluate_file, TeamHealthEvaluationRequest, "--evaluate")
+            if str(request.mission_id) != mission_id:
+                raise typer.BadParameter("team-health request belongs to another mission")
+            payload = client.evaluate_team_health(request).model_dump(mode="json")
+    _emit(payload, as_json=_state(ctx).json_output)
+
+
+@mission_app.command("adapt")
+def adapt_mission_crew(
+    ctx: typer.Context,
+    decision_file: Annotated[Path, typer.Option("--decision")],
+) -> None:
+    """Record one bounded or explicitly approved Mission Crew adaptation."""
+    from mishkan.missions import CrewAdaptationDecision
+
+    decision = _read_contract(decision_file, CrewAdaptationDecision, "--decision")
+    with _daemon_client(ctx) as client:
+        result = client.record_crew_adaptation(decision)
+    _emit(result.model_dump(mode="json"), as_json=_state(ctx).json_output)
+
+
+@mission_app.command("retrospective")
+def mission_retrospective(
+    ctx: typer.Context,
+    mission_id: str,
+    record_file: Annotated[Path | None, typer.Option("--record")] = None,
+    limit: Annotated[int, typer.Option(min=1, max=1_000)] = 100,
+) -> None:
+    """List or record immutable, non-self-promoting mission retrospectives."""
+    from mishkan.missions import MissionRetrospective
+
+    with _daemon_client(ctx) as client:
+        if record_file is None:
+            records = client.mission_retrospectives(mission_id, limit=limit)
+            payload: object = _dump_models(records)
+        else:
+            retrospective = _read_contract(record_file, MissionRetrospective, "--record")
+            if str(retrospective.mission_id) != mission_id:
+                raise typer.BadParameter("retrospective belongs to another mission")
+            payload = client.record_mission_retrospective(retrospective).model_dump(mode="json")
+    _emit(payload, as_json=_state(ctx).json_output)
+
+
 @mission_app.command("assignments")
 def list_mission_assignments(
     ctx: typer.Context,

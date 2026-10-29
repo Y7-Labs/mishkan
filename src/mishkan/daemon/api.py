@@ -46,7 +46,12 @@ from mishkan.artifacts import (
     ArtifactHold as ArtifactEvidenceHold,
 )
 from mishkan.artifacts.service import DurableArtifactService
-from mishkan.config.models import CredentialReference, McpConfig, MishkanConfig
+from mishkan.config.models import (
+    CredentialReference,
+    McpConfig,
+    MishkanConfig,
+    TeamEffectivenessConfig,
+)
 from mishkan.context import (
     CommunityCandidateLoader,
     ContextualRecommendation,
@@ -70,6 +75,7 @@ from mishkan.crewai.mission_governance import (
     MissionGovernanceRunner,
 )
 from mishkan.crewai.skill_learning import CrewAISkillLearningRunner
+from mishkan.crewai.team_effectiveness import CrewAITeamHealthEvaluator, TeamHealthEvaluator
 from mishkan.daemon.auth import TokenFile, TokenRecord
 from mishkan.daemon.bootstrap import DaemonPaths
 from mishkan.daemon.composition import (
@@ -107,13 +113,14 @@ from mishkan.environment import (
 )
 from mishkan.environment.repository import SQLiteEnvironmentRepository
 from mishkan.events import (
-    EventHold as EventEvidenceHold,
-)
-from mishkan.events import (
+    EventEnvelope,
     EventHoldScope,
     EventPage,
     EventRetentionPlan,
     EventRetentionPolicy,
+)
+from mishkan.events import (
+    EventHold as EventEvidenceHold,
 )
 from mishkan.execution import CursorRead, ExecutionRequest, ExecutionSession, SessionSupervisor
 from mishkan.knowledge import (
@@ -155,11 +162,13 @@ from mishkan.mcp import (
 from mishkan.mcp.sdk import McpStdioCommandBuilder
 from mishkan.missions import (
     MissionBrief,
+    MissionCollaborationPlan,
     MissionCompletionReadiness,
     MissionCrewRevision,
     MissionEnvironmentReadiness,
     MissionEnvironmentReadinessService,
     MissionRecord,
+    MissionRunAcceptance,
     MissionRunBinding,
     MissionState,
     MissionTaskClaimService,
@@ -167,6 +176,8 @@ from mishkan.missions import (
     MissionTemplateLoader,
     MissionTemplateService,
     SQLiteMissionRepository,
+    SQLiteTeamEffectivenessRepository,
+    TeamSignalDetector,
 )
 from mishkan.missions.environment import (
     MissionEnvironmentPlanAcceptance,
@@ -477,6 +488,7 @@ def create_app(
     skill_learning_runner: SkillLearningRunner | None = None,
     mission_governance_runner: MissionGovernanceRunner | None = None,
     mission_environment_runner: MissionEnvironmentPlanningRunner | None = None,
+    team_health_evaluator: TeamHealthEvaluator | None = None,
     telemetry_exporter_factory: Callable[[], TelemetryExporter] | None = None,
 ) -> FastAPI:
     paths = DaemonPaths.from_config(config)
@@ -841,6 +853,11 @@ def create_app(
         database_runtime,
         busy_timeout_ms=busy_timeout_ms,
     )
+    team_effectiveness_repository = SQLiteTeamEffectivenessRepository(
+        database_runtime,
+        busy_timeout_ms=busy_timeout_ms,
+    )
+    effective_team_health_evaluator = team_health_evaluator or CrewAITeamHealthEvaluator(config)
     # Loading the daemon must not advance the public event cursor. The immutable
     # roster is persisted as reference data; explicit roster changes remain events.
     mission_repository.record_organization(load_canonical_organization(), emit_event=False)
@@ -1428,6 +1445,9 @@ def create_app(
                                 knowledge_mutations,
                                 community_recommendations,
                                 mission_repository,
+                                team_effectiveness_repository,
+                                effective_team_health_evaluator,
+                                config.team_effectiveness,
                                 conversation_repository,
                                 mission_governance,
                                 mission_environment_planning,
@@ -2034,6 +2054,11 @@ def create_app(
                     item.availability.value == "never_seen" for item in worker_statuses
                 ),
             }
+        team_effectiveness = await _thread_call(
+            team_effectiveness_repository.snapshot,
+            limit=daemon.event_page_limit,
+        )
+        projections["team_effectiveness"] = team_effectiveness
         return current.model_copy(update={"projections": projections})
 
     @app.get("/v1/schedules", response_model=None)
@@ -2337,6 +2362,86 @@ def create_app(
         version: Annotated[int | None, Query(ge=1)] = None,
     ) -> MissionCrewRevision:
         return await _thread_call(mission_repository.crew, str(mission_id), version)
+
+    @app.get(
+        "/v1/missions/{mission_id}/collaboration",
+        response_model=MissionCollaborationPlan,
+    )
+    async def mission_collaboration_get(
+        mission_id: UUID,
+        _principal: TokenRecord = authenticated,
+        version: Annotated[int | None, Query(ge=1)] = None,
+    ) -> MissionCollaborationPlan:
+        return await _thread_call(
+            team_effectiveness_repository.collaboration_plan,
+            str(mission_id),
+            version,
+        )
+
+    @app.get("/v1/missions/{mission_id}/health", response_model=None)
+    async def mission_health_get(
+        mission_id: UUID,
+        _principal: TokenRecord = authenticated,
+        limit: Annotated[int, Query(ge=1, le=1_000)] = 100,
+    ) -> tuple[dict[str, object], ...]:
+        records = await _thread_call(
+            team_effectiveness_repository.health,
+            str(mission_id),
+            limit=limit,
+        )
+        return tuple(record.model_dump(mode="json") for record in records)
+
+    @app.get("/v1/missions/{mission_id}/adaptations", response_model=None)
+    async def mission_adaptations_get(
+        mission_id: UUID,
+        _principal: TokenRecord = authenticated,
+        limit: Annotated[int, Query(ge=1, le=1_000)] = 100,
+    ) -> tuple[dict[str, object], ...]:
+        records = await _thread_call(
+            team_effectiveness_repository.adaptations,
+            str(mission_id),
+            limit=limit,
+        )
+        return tuple(record.model_dump(mode="json") for record in records)
+
+    @app.get("/v1/missions/{mission_id}/retrospective", response_model=None)
+    async def mission_retrospective_get(
+        mission_id: UUID,
+        _principal: TokenRecord = authenticated,
+        limit: Annotated[int, Query(ge=1, le=1_000)] = 100,
+    ) -> tuple[dict[str, object], ...]:
+        records = await _thread_call(
+            team_effectiveness_repository.retrospectives,
+            str(mission_id),
+            limit=limit,
+        )
+        return tuple(record.model_dump(mode="json") for record in records)
+
+    @app.get("/v1/missions/{mission_id}/signals", response_model=None)
+    async def mission_signals_get(
+        mission_id: UUID,
+        _principal: TokenRecord = authenticated,
+        limit: Annotated[int, Query(ge=1, le=10_000)] = 1_000,
+    ) -> tuple[dict[str, object], ...]:
+        records = await _thread_call(
+            team_effectiveness_repository.signals,
+            str(mission_id),
+            limit=limit,
+        )
+        return tuple(record.model_dump(mode="json") for record in records)
+
+    @app.get("/v1/missions/{mission_id}/handoffs", response_model=None)
+    async def mission_handoffs_get(
+        mission_id: UUID,
+        _principal: TokenRecord = authenticated,
+        limit: Annotated[int, Query(ge=1, le=10_000)] = 1_000,
+    ) -> tuple[dict[str, object], ...]:
+        records = await _thread_call(
+            team_effectiveness_repository.handoffs,
+            str(mission_id),
+            limit=limit,
+        )
+        return tuple(record.model_dump(mode="json") for record in records)
 
     @app.get(
         "/v1/missions/{mission_id}/environment-plan",
@@ -3110,6 +3215,9 @@ def _dispatch(
     knowledge_mutations: KnowledgeMutationService | None,
     community_recommendations: ContextualRecommendationService,
     mission_repository: SQLiteMissionRepository,
+    team_effectiveness_repository: SQLiteTeamEffectivenessRepository,
+    team_health_evaluator: TeamHealthEvaluator,
+    team_effectiveness_config: TeamEffectivenessConfig | None,
     conversation_repository: SQLiteConversationRepository,
     mission_governance: MissionGovernanceRunner,
     mission_environment_planning: MissionEnvironmentPlanningRunner,
@@ -3280,6 +3388,126 @@ def _dispatch(
             expected_revision=command.expected_revision,
         )
         return "mission.crew_recorded", recorded_crew.model_dump(mode="json")
+    if command.command_type == "mission.collaboration.record":
+        collaboration_plan = authorized.mission_collaboration
+        if collaboration_plan is None:
+            raise MishkanError(ErrorCode.OUTPUT_CONTRACT, "authorized collaboration plan is absent")
+        recorded_plan = team_effectiveness_repository.record_collaboration_plan(collaboration_plan)
+        return "mission.collaboration_plan_recorded", recorded_plan.model_dump(mode="json")
+    if command.command_type == "mission.health.record":
+        team_health = authorized.team_health_evaluation
+        if team_health is None:
+            raise MishkanError(ErrorCode.OUTPUT_CONTRACT, "authorized team evaluation is absent")
+        recorded_health = team_effectiveness_repository.record_health(team_health)
+        return "mission.team_health_evaluated", recorded_health.model_dump(mode="json")
+    if command.command_type == "mission.health.evaluate":
+        health_request = authorized.team_health_evaluation_request
+        if health_request is None or team_effectiveness_config is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "team-health evaluation configuration is unavailable",
+            )
+        if (
+            len(health_request.evidence_references)
+            > team_effectiveness_config.evidence_max_artifacts
+        ):
+            raise MishkanError(
+                ErrorCode.OUTPUT_CONTRACT,
+                "team-health request exceeds the configured evidence-reference bound",
+            )
+        health_plan = team_effectiveness_repository.collaboration_plan(
+            str(health_request.mission_id), health_request.collaboration_plan_version
+        )
+        assignments = mission_repository.assignments(str(health_request.mission_id))
+        run_bindings = mission_repository.run_bindings(str(health_request.mission_id))
+        accepted_task_ids = frozenset(
+            binding.mission_task_id
+            for binding in run_bindings
+            if binding.acceptance is MissionRunAcceptance.ACCEPTED
+        )
+        handoffs = team_effectiveness_repository.handoffs(str(health_request.mission_id))
+        detected_signals = TeamSignalDetector.detect(
+            health_plan,
+            assignments,
+            handoffs,
+            completed_task_ids=accepted_task_ids,
+            workload_concentration_threshold=team_effectiveness_config.signal_thresholds[
+                "workload_share"
+            ],
+            duplicate_work_threshold=team_effectiveness_config.signal_thresholds["duplicate_work"],
+            missing_handoff_threshold=team_effectiveness_config.signal_thresholds[
+                "missing_handoffs"
+            ],
+            observed_at=health_request.interval_ended_at,
+        )
+        for detected_signal in detected_signals:
+            team_effectiveness_repository.record_signal(detected_signal)
+        run_events: list[EventEnvelope] = []
+        remaining = team_effectiveness_config.evidence_max_events
+        for run_id in dict.fromkeys(binding.run_id for binding in run_bindings):
+            after_cursor = 0
+            while remaining > 0:
+                page = repository.events(
+                    after_cursor=after_cursor,
+                    limit=min(1_000, remaining),
+                    run_id=run_id,
+                    occurred_after=health_request.interval_started_at,
+                    occurred_before=health_request.interval_ended_at,
+                )
+                run_events.extend(page.events)
+                remaining -= len(page.events)
+                if not page.events or page.next_cursor <= after_cursor:
+                    break
+                after_cursor = page.next_cursor
+            if remaining <= 0:
+                break
+        event_signals = TeamSignalDetector.detect_events(
+            health_plan,
+            tuple(run_events),
+            {binding.execution_task_id: binding.mission_task_id for binding in run_bindings},
+            signal_thresholds=team_effectiveness_config.signal_thresholds,
+        )
+        for event_signal in event_signals:
+            team_effectiveness_repository.record_signal(event_signal)
+        signals = team_effectiveness_repository.signals(
+            str(health_request.mission_id),
+            limit=team_effectiveness_config.evidence_max_events,
+        )
+        health_evaluation = team_health_evaluator.evaluate(
+            health_plan,
+            signals,
+            evaluator_identity=health_request.evaluator_identity,
+            interval_started_at=health_request.interval_started_at,
+            interval_ended_at=health_request.interval_ended_at,
+            evidence_cursor=health_request.evidence_cursor,
+            evidence_references=health_request.evidence_references,
+        )
+        recorded_health = team_effectiveness_repository.record_health(health_evaluation)
+        return "mission.team_health_evaluated", recorded_health.model_dump(mode="json")
+    if command.command_type == "mission.adaptation.record":
+        adaptation = authorized.crew_adaptation
+        if adaptation is None:
+            raise MishkanError(ErrorCode.OUTPUT_CONTRACT, "authorized crew adaptation is absent")
+        recorded_adaptation = team_effectiveness_repository.record_adaptation(adaptation)
+        return "mission.crew_adaptation_recorded", recorded_adaptation.model_dump(mode="json")
+    if command.command_type == "mission.retrospective.record":
+        retrospective = authorized.mission_retrospective
+        if retrospective is None:
+            raise MishkanError(ErrorCode.OUTPUT_CONTRACT, "authorized retrospective is absent")
+        recorded_retrospective = team_effectiveness_repository.record_retrospective(retrospective)
+        return "mission.retrospective_recorded", recorded_retrospective.model_dump(mode="json")
+    if command.command_type == "mission.signal.record":
+        signal = authorized.team_signal
+        if signal is None:
+            raise MishkanError(ErrorCode.OUTPUT_CONTRACT, "authorized team signal is absent")
+        recorded_signal = team_effectiveness_repository.record_signal(signal)
+        return "mission.team_signal_recorded", recorded_signal.model_dump(mode="json")
+    if command.command_type == "mission.handoff.record":
+        handoff = authorized.mission_handoff
+        if handoff is None:
+            raise MishkanError(ErrorCode.OUTPUT_CONTRACT, "authorized mission handoff is absent")
+        recorded_handoff = team_effectiveness_repository.record_handoff(handoff)
+        return "mission.handoff_recorded", recorded_handoff.model_dump(mode="json")
     if command.command_type == "conversation.create":
         channel = authorized.conversation_channel
         if channel is None:

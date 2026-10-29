@@ -1,7 +1,7 @@
 # MISHKAN Product Requirements Document
 
-**Status:** Accepted by D-032 on 2026-08-25
-**Version:** 1.4
+**Status:** Accepted by D-032; amended by D-051 on 2026-10-29
+**Version:** 1.5
 **Scope:** Product problem and outcomes only
 
 **Prior approvals:** 2026-08-23 by Y4NN777; amendments through 1.3 approved 2026-08-24
@@ -11,6 +11,9 @@ Version 1.4 replaces the historical fixed 32-identity and 15-outcome assumptions
 templates. It also incorporates the validated engineering-context, native-capability, skills,
 external-harness, communication, intervention, agent-evolution, and mission-scoped environment
 decisions in WD-001–WD-028.
+
+Version 1.5 adds evidence-based Mission Crew formation, epistemic safety, multidimensional team
+effectiveness, contextual collaboration history, bounded adaptation, and governed retrospectives.
 
 ## 1. Problem
 
@@ -177,6 +180,20 @@ applied live and reversibly when policy allows; broader durable promotion depend
 scope, trust, and risk. An agent cannot expand its own authority, change its independence, erase
 failure evidence, or self-certify critical mastery.
 
+### UC-16 — Form and improve an effective Mission Crew
+
+PM and CTO can choose the smallest production shape sufficient for a mission, explain why
+collaboration is needed, and establish explicit responsibilities, decision rights, interaction
+paths, budgets, escalation conditions, and stopping conditions. During the mission, the
+organization exposes outcome, flow, stability, coordination, learning, and resource evidence
+without reducing effectiveness to one score.
+
+Agents can report uncertainty, disagreement, contradictory evidence, a need for help, or failure
+without that report automatically damaging their professional profile. The organization can make
+bounded corrections inside the accepted mission and can propose larger crew or process changes
+through the existing PM, CTO, and CEO governance paths. Comparable collaboration history may
+inform a later mission, but current mission fit and evidence remain decisive.
+
 ## 4. Out of scope
 
 MISHKAN will not:
@@ -290,6 +307,14 @@ project templates. Native, isolated, containerized, declarative, or other reprod
 representations are selected from actual project, platform, isolation, and verification needs.
 Existing project configuration is preferred when compatible; generated descriptions remain
 attributable, reviewable, testable, and governed like other project changes.
+
+### PP-17 — Evidence-based team effectiveness
+
+MISHKAN prefers the smallest sufficient production shape and measures team effectiveness across
+several contextual dimensions. It preserves dissent, uncertainty, failure, and contradictory
+evidence as useful mission evidence; it does not infer agent emotions, create a universal team
+score, or treat activity volume as productivity. Collaboration history informs but never silently
+determines crew composition or professional advancement.
 
 ## 6. Success criteria
 
@@ -405,6 +430,15 @@ An evaluated mission can produce a scoped reversible improvement to an existing 
 profile, use it on a later safe action when policy permits, promote it only to the justified scope,
 and restore the prior version while preserving failure and evaluation evidence.
 
+### SC-19 — Adaptive Mission Crew effectiveness
+
+Representative mission fixtures demonstrate that a single owner is selected when collaboration
+adds no justified value, while cross-disciplinary or assurance-sensitive work receives an explicit
+collaboration plan. During execution, broken handoffs, duplicate work, context drift, blocked flow,
+and unacknowledged risk become visible; bounded correction preserves authority; material crew
+changes follow executive governance; and the retrospective produces attributable proposals rather
+than self-promoting organizational changes.
+
 ## 7. Product boundaries requiring later specification
 
 The PRD intentionally does not decide:
@@ -419,10 +453,10 @@ The PRD intentionally does not decide:
 
 Those decisions follow only after this product problem and scope are approved.
 
-## 8. Product decision baseline accepted by D-032
+## 8. Product decision baseline accepted by D-032 and amended by D-051
 
-This list combines retained prior decisions with the amendments accepted in version 1.4. The
-combined baseline is authoritative under D-032.
+This list combines retained prior decisions with the amendments accepted in versions 1.4 and 1.5.
+The combined baseline is authoritative under D-032 and D-051.
 
 1. One run binds one execution context: one repository and immutable base revision, or one
    prospective workspace before a greenfield repository exists. Authorized establishment and later
@@ -456,3 +490,7 @@ combined baseline is authoritative under D-032.
 12. Skills use concrete `SKILL.md` packages and may be corrected or maintained unattended when
     effective policy allows. Newly discovered community extensions remain proposals until their
     lifecycle action is explicitly authorized.
+13. Mission Crews use the smallest sufficient production shape, explicit collaboration plans,
+    multidimensional effectiveness evidence, epistemic-safety guarantees, independently evaluated
+    health, bounded adaptation, and governed retrospectives. No universal team size, composite
+    score, leaderboard, or automatic individual-competence penalty is permitted.

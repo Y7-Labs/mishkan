@@ -57,6 +57,7 @@ from mishkan.conversations.models import (
 )
 from mishkan.crewai.mission_environment import MissionEnvironmentPlanningOutput
 from mishkan.crewai.mission_governance import (
+    CrewAICollaborationProposal,
     CTOMissionReview,
     MissionGovernanceDisagreement,
     MissionGovernanceRequest,
@@ -146,6 +147,15 @@ from mishkan.missions.models import (
     MissionTransition,
 )
 from mishkan.missions.readiness import MissionEnvironmentReadiness
+from mishkan.missions.team_effectiveness import (
+    CrewAdaptationDecision,
+    MissionCollaborationPlan,
+    MissionHandoff,
+    MissionRetrospective,
+    TeamHealthEvaluation,
+    TeamHealthEvaluationRequest,
+    TeamSignal,
+)
 from mishkan.missions.templates import MissionTemplateCatalogue, MissionTemplateDefinition
 from mishkan.notifications import NotificationConfig, NotificationPage, NotificationRecord
 from mishkan.organization.evolution import (
@@ -269,6 +279,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "change-set-v1.schema.json": ChangeSet,
     "command-result-v1.schema.json": CommandResult,
     "config-v1.schema.json": MishkanConfig,
+    "crew-adaptation-decision-v1.schema.json": CrewAdaptationDecision,
     "worker-certificate-bundle-v1.schema.json": WorkerCertificateBundle,
     "worker-artifact-upload-request-v1.schema.json": WorkerArtifactUploadRequest,
     "worker-certificate-rotation-request-v1.schema.json": WorkerCertificateRotationRequest,
@@ -300,10 +311,14 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "contextual-recommendation-request-v1.schema.json": ContextualRecommendationRequest,
     "contextual-recommendation-v1.schema.json": ContextualRecommendation,
     "crewai-cto-mission-review-v1.schema.json": CTOMissionReview,
+    "crewai-collaboration-proposal-v1.schema.json": CrewAICollaborationProposal,
     "crewai-mission-governance-result-v1.schema.json": MissionGovernanceResult,
     "crewai-mission-governance-disagreement-v1.schema.json": MissionGovernanceDisagreement,
     "crewai-mission-governance-request-v1.schema.json": MissionGovernanceRequest,
     "crewai-pm-mission-proposal-v1.schema.json": PMMissionProposal,
+    "mission-collaboration-plan-v1.schema.json": MissionCollaborationPlan,
+    "mission-handoff-v1.schema.json": MissionHandoff,
+    "mission-retrospective-v1.schema.json": MissionRetrospective,
     "crewai-mission-environment-output-v1.schema.json": MissionEnvironmentPlanningOutput,
     "conversation-channel-v1.schema.json": ConversationChannel,
     "conversation-message-v1.schema.json": ConversationMessage,
@@ -450,6 +465,9 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "telemetry-record-v1.schema.json": TelemetryRecord,
     "telemetry-status-v1.schema.json": TelemetryStatus,
     "technical-pack-catalogue-v1.schema.json": TechnicalPackCatalogue,
+    "team-health-evaluation-v1.schema.json": TeamHealthEvaluation,
+    "team-health-evaluation-request-v1.schema.json": TeamHealthEvaluationRequest,
+    "team-signal-v1.schema.json": TeamSignal,
 }
 
 _EXPORT_MANIFEST = ".mishkan-schema-export.json"

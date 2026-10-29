@@ -12,6 +12,7 @@ from mishkan.crewai.mission_environment import (
     MissionEnvironmentPlanningOutput,
 )
 from mishkan.crewai.mission_governance import (
+    CrewAICollaborationProposal,
     CrewAIMissionGovernanceRunner,
     CTOMissionReview,
     MissionGovernanceResult,
@@ -19,6 +20,8 @@ from mishkan.crewai.mission_governance import (
 )
 from mishkan.environment import EnvironmentOutcome
 from mishkan.missions import (
+    CollaborationEdge,
+    CollaborationInteraction,
     CrewAssignmentKind,
     CrewSelectionEvidence,
     MissionCrewMember,
@@ -34,6 +37,7 @@ from mishkan.missions import (
     MissionTemplateLoader,
     MissionTemplateReference,
     MissionTemplateService,
+    ProductionShape,
     SQLiteMissionRepository,
 )
 from mishkan.organization import load_canonical_organization
@@ -241,6 +245,25 @@ def _governance(
         organization_id=organization.organization_id,
         organization_version=organization.organization_version,
     )
+    collaboration = CrewAICollaborationProposal(
+        production_shape=ProductionShape.SINGLE_OWNER,
+        production_owner_ids=(scenario.producer,),
+        alternatives=("single owner with independent downstream assurance",),
+        interactions=(
+            CollaborationEdge(
+                source_identity=scenario.producer,
+                target_identity=scenario.evaluator,
+                interaction=CollaborationInteraction.HANDOFF,
+                purpose=f"Submit {scenario.scenario_id} evidence for independent evaluation",
+            ),
+            CollaborationEdge(
+                source_identity=scenario.evaluator,
+                target_identity=scenario.reporter,
+                interaction=CollaborationInteraction.HANDOFF,
+                purpose=f"Submit accepted {scenario.scenario_id} evidence for reporting",
+            ),
+        ),
+    )
     pm = PMMissionProposal(
         problem=scenario.problem,
         desired_outcome=scenario.outcome,
@@ -266,6 +289,7 @@ def _governance(
         ),
         rationale=f"Product rationale for {scenario.scenario_id}",
         evidence_references=(f"fixture:{scenario.scenario_id}:product",),
+        collaboration=collaboration,
     )
     cto = CTOMissionReview(
         disposition="confirmed",
@@ -279,6 +303,7 @@ def _governance(
             _member(scenario.reporter, CrewAssignmentKind.REPORTING, scenario),
         ),
         unresolved_findings=(),
+        approved_collaboration=collaboration,
     )
     selection_references = tuple(
         reference

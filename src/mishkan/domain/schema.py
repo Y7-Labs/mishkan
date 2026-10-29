@@ -10,7 +10,7 @@ class SchemaRegistry:
 
     _supported: Mapping[str, frozenset[str]] = {
         "mishkan.config": frozenset(
-            {"1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8"}
+            {"1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9"}
         ),
         "mishkan.context-pack": frozenset({"1.0"}),
         "mishkan.error": frozenset({"1.0"}),

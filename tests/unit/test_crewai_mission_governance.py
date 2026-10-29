@@ -10,6 +10,7 @@ from mishkan.config.models import MishkanConfig
 from mishkan.config.presets import preset_text
 from mishkan.conversations import EscalationOption
 from mishkan.crewai.mission_governance import (
+    CrewAICollaborationProposal,
     CrewAIMissionGovernanceRunner,
     CTOMissionReview,
     MissionGovernanceEvidence,
@@ -18,6 +19,9 @@ from mishkan.crewai.mission_governance import (
 )
 from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.missions import (
+    AdaptationKind,
+    CollaborationEdge,
+    CollaborationInteraction,
     CrewAssignmentKind,
     CrewSelectionEvidence,
     MissionCrewMember,
@@ -25,8 +29,10 @@ from mishkan.missions import (
     MissionOrigin,
     MissionOriginKind,
     MissionRecord,
+    MissionResourceLimit,
     MissionTemplateLoader,
     MissionTemplateService,
+    ProductionShape,
 )
 from mishkan.organization import load_canonical_organization
 
@@ -72,6 +78,25 @@ def _pm() -> PMMissionProposal:
         ),
         rationale="The proposal covers the product outcome and independent acceptance",
         evidence_references=("evidence:product-analysis",),
+        collaboration=CrewAICollaborationProposal(
+            production_shape=ProductionShape.SINGLE_OWNER,
+            production_owner_ids=("Backend_Service_Engineer",),
+            alternatives=("single owner with downstream independent assurance",),
+            interactions=(
+                CollaborationEdge(
+                    source_identity="Backend_Service_Engineer",
+                    target_identity="Product_Functional_Evaluator",
+                    interaction=CollaborationInteraction.HANDOFF,
+                    purpose="Submit production evidence for independent evaluation",
+                ),
+                CollaborationEdge(
+                    source_identity="Product_Functional_Evaluator",
+                    target_identity="Technical_Change_Reporter",
+                    interaction=CollaborationInteraction.HANDOFF,
+                    purpose="Submit accepted evaluation evidence for reporting",
+                ),
+            ),
+        ),
     )
 
 
@@ -129,6 +154,7 @@ def _cto(
         pm_recommended_option_id="pm-proposal" if rejected else None,
         cto_recommended_option_id="cto-remediation" if rejected else None,
         independent_work_continuing=("task:documentation",) if rejected else (),
+        approved_collaboration=None if rejected else _pm().collaboration,
     )
 
 
@@ -165,9 +191,24 @@ def test_pm_cto_outputs_compile_to_confirmed_brief_and_contextual_crew(tmp_path:
     assert result.lineage.cto_model_route == runner._config.crewai.mission_cto_model_route
     assert result.crew.mission_lead_id == "Backend_Service_Engineer"
     assert {item.identity_id for item in result.crew.members} == set(result.brief.proposed_crew)
+    assert result.collaboration == _pm().collaboration
     assert any(
         ref.startswith("crewai-output:") for ref in result.brief.pm_confirmation.evidence_references
     )
+    plan = result.collaboration_plan(
+        version=1,
+        context_references=("context-pack:mission:1",),
+        artifact_references=("artifact:brief",),
+        resource_budgets=(MissionResourceLimit(name="model_tokens", value=20_000, unit="token"),),
+        communication_budget=MissionResourceLimit(
+            name="coordination_messages", value=20, unit="message"
+        ),
+        permitted_adaptations=(AdaptationKind.REPAIR_CONTEXT,),
+        stop_conditions=("material authority change is required",),
+        user_impact="Users recover access without unreviewed security risk",
+    )
+    assert plan.crewai_coordination_reference == str(result.lineage.coordination_id)
+    assert plan.production_shape is ProductionShape.SINGLE_OWNER
 
 
 def test_proposal_runs_bounded_pm_then_cto_crewai_work(
