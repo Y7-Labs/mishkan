@@ -5,6 +5,8 @@ from typing import Literal
 import pytest
 from pydantic import ValidationError
 
+from mishkan.application import ApplicationCommand, CommandResult, CommandStatus
+from mishkan.config.models import TeamEffectivenessConfig
 from mishkan.conversations import (
     ChannelClass,
     ConversationChannel,
@@ -64,6 +66,7 @@ from mishkan.missions import (
     TeamSignal,
     TeamSignalDetector,
 )
+from mishkan.missions.team_cadence import TeamHealthCadenceDriver
 from mishkan.organization import load_canonical_organization
 from mishkan.persistence import SchemaManager, SQLiteApplicationRepository
 
@@ -735,6 +738,67 @@ def test_deterministic_signals_detect_duplicate_context_drift_and_broken_handoff
     assert all(item.kind != "missing_handoff" for item in repaired)
 
 
+def test_deterministic_signals_cover_overlap_dependency_and_repaired_handoff(
+    tmp_path: Path,
+) -> None:
+    _, _, mission, brief, crew = _mission_context(tmp_path)
+    plan = _plan(mission, brief, crew)
+    producer = _assignment(plan, "produce-api", expected_result="Produce the API")
+    overlapping = _assignment(
+        plan,
+        "produce-sdk",
+        owner="Integration_SDK_Engineer",
+        expected_result="Produce the SDK",
+    )
+    dependency_drift = _assignment(
+        plan,
+        "publish-sdk",
+        owner="Integration_SDK_Engineer",
+        expected_result="Publish the SDK",
+    ).model_copy(update={"dependencies": ("missing-contract",)})
+    prior_missing = TeamSignal(
+        mission_id=mission.mission_id,
+        collaboration_plan_version=plan.version,
+        kind="missing_handoff",
+        task_ids=(producer.task_id,),
+        value=1,
+        unit="handoff",
+        evidence_references=(f"assignment:{producer.assignment_id}:handoff:evaluator",),
+    )
+    handoff = MissionHandoff(
+        mission_id=mission.mission_id,
+        collaboration_plan_version=plan.version,
+        from_identity="Backend_Service_Engineer",
+        to_identity="Product_Functional_Evaluator",
+        task_id=producer.task_id,
+        result_references=("result:api",),
+        artifact_references=("artifact:api",),
+        decisions=(),
+        changed_assumptions=(),
+        uncertainty=(),
+        failures=(),
+        unresolved_questions=(),
+        required_next_action="Evaluate the API evidence",
+        acceptance_conditions=("API contract is accepted",),
+    )
+
+    signals = TeamSignalDetector.detect(
+        plan,
+        (producer, overlapping, dependency_drift),
+        (handoff,),
+        completed_task_ids=frozenset({producer.task_id}),
+        active_task_ids=frozenset({producer.task_id, overlapping.task_id}),
+        prior_signals=(prior_missing,),
+        observed_at=utc_now(),
+    )
+
+    by_kind = {item.kind: item for item in signals}
+    assert {"overlapping_work", "dependency_drift", "repaired_handoff"} <= set(by_kind)
+    assert set(by_kind["overlapping_work"].task_ids) == {"produce-api", "produce-sdk"}
+    assert by_kind["dependency_drift"].task_ids == ("publish-sdk",)
+    assert by_kind["repaired_handoff"].task_ids == ("produce-api",)
+
+
 def test_event_signals_derive_flow_rejection_and_rework_without_model_inference(
     tmp_path: Path,
 ) -> None:
@@ -794,6 +858,169 @@ def test_event_signals_derive_flow_rejection_and_rework_without_model_inference(
     assert all(
         reference.startswith("event:") for reference in by_kind["rework"].evidence_references
     )
+
+
+def test_event_signals_cover_risk_and_coordination_model_tool_costs(tmp_path: Path) -> None:
+    _, _, mission, brief, crew = _mission_context(tmp_path)
+    plan = _plan(mission, brief, crew)
+    observed_at = utc_now()
+
+    def event(cursor: int, event_type: str, payload: dict[str, object]) -> EventEnvelope:
+        return EventEnvelope(
+            event_id=new_id(),
+            cursor=cursor,
+            event_type=event_type,
+            source="test",
+            entity_type="mission",
+            entity_id=str(mission.mission_id),
+            task_id="task-1",
+            occurred_at=observed_at,
+            sensitivity="internal",
+            payload=payload,
+        )
+
+    events = (
+        event(1, "mission.risk_observed", {"risk_reference": "risk:unreviewed"}),
+        event(2, "mission.risk_observed", {"risk_reference": "risk:accepted"}),
+        event(3, "mission.risk_acknowledged", {"risk_reference": "risk:accepted"}),
+        event(4, "conversation.message_posted", {}),
+        event(5, "mission.collaboration_interaction_recorded", {}),
+        event(6, "crewai.model_invoked", {}),
+        event(7, "tool.call_completed", {}),
+    )
+
+    signals = TeamSignalDetector.detect_events(
+        plan,
+        events,
+        {"task-1": "implement-recovery"},
+        signal_thresholds={
+            "blocked_time_seconds": 60,
+            "queue_time_seconds": 60,
+            "repeated_rejections": 2,
+            "duplicate_work": 1,
+            "missing_handoffs": 1,
+            "workload_share": 0.75,
+        },
+    )
+
+    by_kind = {item.kind: item for item in signals}
+    assert {
+        "unacknowledged_risk",
+        "coordination_cost",
+        "model_cost",
+        "tool_cost",
+    } <= set(by_kind)
+    assert by_kind["unacknowledged_risk"].value == 1
+    assert by_kind["coordination_cost"].value == 2
+
+
+@pytest.mark.anyio
+async def test_public_cadence_dispatches_health_evaluation_outside_task_completion(
+    tmp_path: Path,
+) -> None:
+    database, missions, mission, brief, crew = _mission_context(tmp_path)
+    teams = SQLiteTeamEffectivenessRepository(database)
+    plan = _plan(mission, brief, crew)
+    teams.record_collaboration_plan(plan)
+    observed: list[ApplicationCommand] = []
+
+    async def execute(command: ApplicationCommand, principal: str) -> CommandResult:
+        assert principal == "Product_Functional_Evaluator"
+        observed.append(command)
+        return CommandResult(
+            command_id=command.command_id,
+            status=CommandStatus.ACCEPTED,
+            target_type=command.target_type,
+            target_id=command.target_id,
+            payload={},
+        )
+
+    driver = TeamHealthCadenceDriver(
+        TeamEffectivenessConfig(
+            evaluation_cadence_events=100,
+            evaluation_cadence_seconds=60,
+            evidence_max_events=100,
+            evidence_max_artifacts=100,
+            history_freshness_days=30,
+            max_history_candidates=10,
+            signal_thresholds={
+                "blocked_time_seconds": 60,
+                "queue_time_seconds": 60,
+                "repeated_rejections": 2,
+                "duplicate_work": 1,
+                "overlapping_work": 1,
+                "missing_handoffs": 1,
+                "workload_share": 0.75,
+            },
+            resource_budgets={"coordination_messages": 100},
+            automatic_adaptations=("repair_context",),
+        ),
+        SQLiteApplicationRepository(database),
+        missions,
+        teams,
+        execute,
+    )
+
+    await driver.tick(now=plan.created_at + timedelta(seconds=61))
+
+    assert len(observed) == 1
+    assert observed[0].command_type == "mission.health.evaluate"
+    request = observed[0].payload["request"]
+    assert request["mission_id"] == str(mission.mission_id)
+    assert request["evaluator_identity"] == "Product_Functional_Evaluator"
+
+
+@pytest.mark.anyio
+async def test_health_events_do_not_create_a_model_evaluation_feedback_loop(
+    tmp_path: Path,
+) -> None:
+    database, missions, mission, brief, crew = _mission_context(tmp_path)
+    teams = SQLiteTeamEffectivenessRepository(database)
+    plan = _plan(mission, brief, crew)
+    teams.record_collaboration_plan(plan)
+    application = SQLiteApplicationRepository(database)
+    evidence_cursor = application.snapshot().cursor
+    teams.record_health(_evaluation(plan, cursor=evidence_cursor))
+    observed: list[ApplicationCommand] = []
+
+    async def execute(command: ApplicationCommand, _principal: str) -> CommandResult:
+        observed.append(command)
+        return CommandResult(
+            command_id=command.command_id,
+            status=CommandStatus.ACCEPTED,
+            target_type=command.target_type,
+            target_id=command.target_id,
+        )
+
+    driver = TeamHealthCadenceDriver(
+        TeamEffectivenessConfig(
+            evaluation_cadence_events=1,
+            evaluation_cadence_seconds=1,
+            evidence_max_events=100,
+            evidence_max_artifacts=100,
+            history_freshness_days=30,
+            max_history_candidates=10,
+            signal_thresholds={
+                "blocked_time_seconds": 60,
+                "queue_time_seconds": 60,
+                "repeated_rejections": 2,
+                "duplicate_work": 1,
+                "overlapping_work": 1,
+                "missing_handoffs": 1,
+                "workload_share": 0.75,
+            },
+            resource_budgets={"coordination_messages": 100},
+            automatic_adaptations=("repair_context",),
+        ),
+        application,
+        missions,
+        teams,
+        execute,
+    )
+
+    await driver.tick(now=utc_now() + timedelta(minutes=10))
+
+    assert observed == []
 
 
 def test_execution_location_does_not_change_authoritative_team_evidence(

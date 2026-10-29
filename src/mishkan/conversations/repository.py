@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import TypeVar
 
@@ -342,6 +343,17 @@ class SQLiteConversationRepository:
                     ),
                 },
             )
+            if intervention.kind is InterventionKind.ACCEPT_RISK:
+                self._event(
+                    session,
+                    aggregate_id=str(intervention.mission_id),
+                    entity_type="mission",
+                    event_type="mission.risk_acknowledged",
+                    payload={
+                        "risk_reference": self._risk_reference(intervention.target_id),
+                        "intervention_id": str(intervention.intervention_id),
+                    },
+                )
         return intervention
 
     def channel(self, conversation_id: str) -> ConversationChannel:
@@ -819,3 +831,7 @@ class SQLiteConversationRepository:
                 published_at=None,
             )
         )
+
+    @staticmethod
+    def _risk_reference(risk: str) -> str:
+        return f"risk:sha256:{hashlib.sha256(risk.encode()).hexdigest()}"

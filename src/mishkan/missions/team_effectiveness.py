@@ -581,14 +581,21 @@ class TeamSignalDetector:
         handoffs: tuple[MissionHandoff, ...],
         *,
         completed_task_ids: frozenset[str] = frozenset(),
+        active_task_ids: frozenset[str] = frozenset(),
+        prior_signals: tuple[TeamSignal, ...] = (),
         workload_concentration_threshold: float = 0.8,
         duplicate_work_threshold: float = 1,
+        overlapping_work_threshold: float = 1,
         missing_handoff_threshold: float = 1,
         observed_at: datetime | None = None,
     ) -> tuple[TeamSignal, ...]:
         if not 0 <= workload_concentration_threshold <= 1:
             raise ValueError("workload concentration threshold must be between zero and one")
-        if duplicate_work_threshold < 0 or missing_handoff_threshold < 0:
+        if (
+            duplicate_work_threshold < 0
+            or overlapping_work_threshold < 0
+            or missing_handoff_threshold < 0
+        ):
             raise ValueError("team-signal occurrence thresholds must be non-negative")
         latest = MissionAssignmentGraphValidator.latest(assignments)
         timestamp = require_aware(observed_at or utc_now())
@@ -664,6 +671,58 @@ class TeamSignalDetector:
                 )
             )
 
+        active_production = tuple(item for item in production if item.task_id in active_task_ids)
+        overlapping_tasks: set[str] = set()
+        overlapping_evidence: set[str] = set()
+        overlapping_pairs = 0
+        for index, left in enumerate(active_production):
+            for right in active_production[index + 1 :]:
+                shared_scopes = set(left.path_scopes).intersection(right.path_scopes)
+                same_result = (
+                    left.expected_result.casefold().strip()
+                    == right.expected_result.casefold().strip()
+                )
+                if shared_scopes and not same_result:
+                    overlapping_pairs += 1
+                    overlapping_tasks.update((left.task_id, right.task_id))
+                    overlapping_evidence.update(
+                        (f"assignment:{left.assignment_id}", f"assignment:{right.assignment_id}")
+                    )
+        if overlapping_tasks and overlapping_pairs >= overlapping_work_threshold:
+            signals.append(
+                cls._signal(
+                    plan,
+                    "overlapping_work",
+                    tuple(sorted(overlapping_tasks)),
+                    float(overlapping_pairs),
+                    "pair",
+                    tuple(sorted(overlapping_evidence)),
+                    timestamp,
+                )
+            )
+
+        dependency_drift = tuple(
+            item
+            for item in latest.values()
+            if any(dependency not in latest for dependency in item.dependencies)
+            or (
+                item.task_id in completed_task_ids
+                and any(dependency not in completed_task_ids for dependency in item.dependencies)
+            )
+        )
+        if dependency_drift:
+            signals.append(
+                cls._signal(
+                    plan,
+                    "dependency_drift",
+                    tuple(item.task_id for item in dependency_drift),
+                    float(len(dependency_drift)),
+                    "assignment",
+                    tuple(f"assignment:{item.assignment_id}" for item in dependency_drift),
+                    timestamp,
+                )
+            )
+
         recorded = {(item.task_id, item.from_identity, item.to_identity) for item in handoffs}
         missing: list[tuple[str, CollaborationEdge, MissionTaskAssignment]] = []
         for task_id in sorted(completed_task_ids):
@@ -689,6 +748,30 @@ class TeamSignalDetector:
                         f"assignment:{item[2].assignment_id}:handoff:{item[1].target_identity}"
                         for item in missing
                     ),
+                    timestamp,
+                )
+            )
+        prior_missing = {
+            (task_id, reference)
+            for signal in prior_signals
+            if signal.kind == "missing_handoff"
+            for task_id in signal.task_ids
+            for reference in signal.evidence_references
+        }
+        repaired = tuple(
+            item
+            for item in handoffs
+            if any(task_id == item.task_id for task_id, _reference in prior_missing)
+        )
+        if repaired:
+            signals.append(
+                cls._signal(
+                    plan,
+                    "repaired_handoff",
+                    tuple(dict.fromkeys(item.task_id for item in repaired)),
+                    float(len(repaired)),
+                    "handoff",
+                    tuple(f"handoff:{item.handoff_id}" for item in repaired),
                     timestamp,
                 )
             )
@@ -778,6 +861,74 @@ class TeamSignalDetector:
                     task_mapping,
                     blocked_seconds,
                     "seconds",
+                    observed_at,
+                )
+            )
+
+        risk_observations = {
+            str(item.payload["risk_reference"]): item
+            for item in ordered
+            if item.event_type == "mission.risk_observed"
+            and isinstance(item.payload.get("risk_reference"), str)
+        }
+        acknowledged_risks = {
+            str(item.payload["risk_reference"])
+            for item in ordered
+            if item.event_type == "mission.risk_acknowledged"
+            and isinstance(item.payload.get("risk_reference"), str)
+        }
+        unacknowledged = tuple(
+            item
+            for reference, item in risk_observations.items()
+            if reference not in acknowledged_risks
+        )
+        if unacknowledged:
+            signals.append(
+                cls._event_signal(
+                    plan,
+                    "unacknowledged_risk",
+                    unacknowledged,
+                    task_mapping,
+                    float(len(unacknowledged)),
+                    "risk",
+                    observed_at,
+                )
+            )
+
+        resource_events: dict[TeamSignalKind, tuple[EventEnvelope, ...]] = {
+            "coordination_cost": tuple(
+                item
+                for item in ordered
+                if item.event_type
+                in {
+                    "conversation.message_posted",
+                    "mission.collaboration_interaction_recorded",
+                    "mission.handoff_recorded",
+                }
+            ),
+            "model_cost": tuple(
+                item for item in ordered if item.event_type == "crewai.model_invoked"
+            ),
+            "tool_cost": tuple(
+                item for item in ordered if item.event_type == "tool.call_completed"
+            ),
+        }
+        resource_units: dict[TeamSignalKind, str] = {
+            "coordination_cost": "interaction",
+            "model_cost": "invocation",
+            "tool_cost": "invocation",
+        }
+        for kind, evidence in resource_events.items():
+            if not evidence:
+                continue
+            signals.append(
+                cls._event_signal(
+                    plan,
+                    kind,
+                    evidence,
+                    task_mapping,
+                    float(len(evidence)),
+                    resource_units[kind],
                     observed_at,
                 )
             )

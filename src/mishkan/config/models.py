@@ -970,6 +970,7 @@ class TeamEffectivenessConfig(StrictConfigModel):
             "queue_time_seconds",
             "repeated_rejections",
             "duplicate_work",
+            "overlapping_work",
             "missing_handoffs",
             "workload_share",
         }

@@ -320,6 +320,7 @@ team_effectiveness:
     queue_time_seconds: 1800
     repeated_rejections: 2
     duplicate_work: 1
+    overlapping_work: 1
     missing_handoffs: 1
     workload_share: 0.75
   resource_budgets:

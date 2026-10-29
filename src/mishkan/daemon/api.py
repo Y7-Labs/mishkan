@@ -184,6 +184,7 @@ from mishkan.missions.environment import (
     MissionEnvironmentPlanValidator,
 )
 from mishkan.missions.inspection import MissionInspectionService
+from mishkan.missions.team_cadence import TeamHealthCadenceDriver
 from mishkan.notifications import (
     NotificationDelivery,
     NotificationPage,
@@ -901,6 +902,7 @@ def create_app(
     notification_service = NotificationService(config.notifications)
     telemetry_tasks: set[asyncio.Task[object]] = set()
     schedule_driver: ScheduleDriver | None = None
+    team_health_cadence: TeamHealthCadenceDriver | None = None
 
     def project_telemetry(
         command: ApplicationCommand,
@@ -1531,6 +1533,14 @@ def create_app(
             schedule_repository,
             execute_command,
         )
+    if config.team_effectiveness is not None:
+        team_health_cadence = TeamHealthCadenceDriver(
+            config.team_effectiveness,
+            repository,
+            mission_repository,
+            team_effectiveness_repository,
+            execute_command,
+        )
 
     mcp_http: McpHttpFacade | None = None
     if mcp_config is not None and mcp_config.facade.enabled:
@@ -1566,6 +1576,8 @@ def create_app(
         try:
             if schedule_driver is not None:
                 schedule_driver.start()
+            if team_health_cadence is not None:
+                team_health_cadence.start()
             if worker_recovery is not None:
                 worker_recovery.start()
             if mcp_http is None:
@@ -1578,6 +1590,8 @@ def create_app(
                 await worker_recovery.stop()
             if schedule_driver is not None:
                 await schedule_driver.stop()
+            if team_health_cadence is not None:
+                await team_health_cadence.stop()
             for task in telemetry_tasks:
                 task.cancel()
             if mcp_runner is not None:
@@ -3425,16 +3439,30 @@ def _dispatch(
             for binding in run_bindings
             if binding.acceptance is MissionRunAcceptance.ACCEPTED
         )
+        active_task_ids = frozenset(
+            binding.mission_task_id
+            for binding in run_bindings
+            if binding.acceptance is MissionRunAcceptance.PENDING
+        )
         handoffs = team_effectiveness_repository.handoffs(str(health_request.mission_id))
+        prior_signals = team_effectiveness_repository.signals(
+            str(health_request.mission_id),
+            limit=team_effectiveness_config.evidence_max_events,
+        )
         detected_signals = TeamSignalDetector.detect(
             health_plan,
             assignments,
             handoffs,
             completed_task_ids=accepted_task_ids,
+            active_task_ids=active_task_ids,
+            prior_signals=prior_signals,
             workload_concentration_threshold=team_effectiveness_config.signal_thresholds[
                 "workload_share"
             ],
             duplicate_work_threshold=team_effectiveness_config.signal_thresholds["duplicate_work"],
+            overlapping_work_threshold=team_effectiveness_config.signal_thresholds[
+                "overlapping_work"
+            ],
             missing_handoff_threshold=team_effectiveness_config.signal_thresholds[
                 "missing_handoffs"
             ],
@@ -3461,9 +3489,34 @@ def _dispatch(
                 after_cursor = page.next_cursor
             if remaining <= 0:
                 break
+        if remaining > 0:
+            mission_page = repository.events(
+                limit=min(1_000, remaining),
+                entity_id=str(health_request.mission_id),
+                occurred_after=health_request.interval_started_at,
+                occurred_before=health_request.interval_ended_at,
+            )
+            run_events.extend(mission_page.events)
+            remaining -= len(mission_page.events)
+        if remaining > 0:
+            for channel in conversation_repository.channels(
+                mission_id=str(health_request.mission_id),
+                limit=min(1_000, remaining),
+            ):
+                if remaining <= 0:
+                    break
+                conversation_page = repository.events(
+                    limit=min(1_000, remaining),
+                    entity_id=str(channel.conversation_id),
+                    occurred_after=health_request.interval_started_at,
+                    occurred_before=health_request.interval_ended_at,
+                )
+                run_events.extend(conversation_page.events)
+                remaining -= len(conversation_page.events)
+        unique_events = tuple({event.event_id: event for event in run_events}.values())
         event_signals = TeamSignalDetector.detect_events(
             health_plan,
-            tuple(run_events),
+            unique_events,
             {binding.execution_task_id: binding.mission_task_id for binding in run_bindings},
             signal_thresholds=team_effectiveness_config.signal_thresholds,
         )

@@ -1128,6 +1128,26 @@ class SQLiteMissionRepository:
                     "task_count": len(report.task_results),
                 },
             )
+            observed_risks = {
+                (risk, item.mission_task_id)
+                for item in report.task_results
+                for risk in item.residual_risks
+            }
+            observed_risks.update(
+                (risk, report.reporting_mission_task_id) for risk in report.residual_risks
+            )
+            for risk, task_id in sorted(observed_risks):
+                self._event(
+                    session,
+                    aggregate_id=str(report.mission_id),
+                    entity_type="mission",
+                    event_type="mission.risk_observed",
+                    payload={
+                        "risk_reference": self._risk_reference(risk),
+                        "report_id": str(report.report_id),
+                        "task_id": task_id,
+                    },
+                )
         return report
 
     def run_reports(self, mission_id: str, *, limit: int = 1_000) -> tuple[MissionRunReport, ...]:
@@ -1664,3 +1684,7 @@ class SQLiteMissionRepository:
                 published_at=None,
             )
         )
+
+    @staticmethod
+    def _risk_reference(risk: str) -> str:
+        return f"risk:sha256:{hashlib.sha256(risk.encode()).hexdigest()}"
