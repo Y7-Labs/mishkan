@@ -3,13 +3,16 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from mishkan.config.loader import ConfigLoader
 from mishkan.config.models import MishkanConfig
 from mishkan.config.presets import preset_text
 from mishkan.crewai.team_effectiveness import (
     CrewAITeamHealthEvaluator,
+    TeamDimensionInterpretation,
     TeamHealthAssessmentOutput,
+    TeamHealthInterpretationOutput,
 )
 from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.domain.identity import new_id
@@ -115,6 +118,24 @@ def _output() -> TeamHealthAssessmentOutput:
     )
 
 
+def _interpretation() -> TeamHealthInterpretationOutput:
+    return TeamHealthInterpretationOutput(
+        assessments=tuple(
+            TeamDimensionInterpretation(
+                dimension=dimension,
+                status=TeamHealthStatus.HEALTHY,
+                observations=(f"Evidence supports {dimension.value}",),
+            )
+            for dimension in TeamDimension
+        ),
+        strengths=("Ownership is explicit",),
+        risks=("A contradictory security finding remains unresolved",),
+        limitations=("Only one milestone interval was evaluated",),
+        confidence_basis="The supplied signal was interpreted independently",
+        status=TeamHealthStatus.ATTENTION,
+    )
+
+
 def test_crewai_output_compiles_without_hiding_dissent_or_creating_a_score() -> None:
     plan = _plan()
     now = utc_now()
@@ -135,13 +156,22 @@ def test_crewai_output_compiles_without_hiding_dissent_or_creating_a_score() -> 
     assert "sha256:" in evaluation.confidence_basis
 
 
-def test_crewai_evaluation_rejects_invented_evidence() -> None:
+@pytest.mark.parametrize("nested", [False, True])
+def test_crewai_evaluation_rejects_invented_evidence(nested: bool) -> None:
     plan = _plan()
     now = utc_now()
+    output = _output()
+    if nested:
+        first = output.assessments[0].model_copy(
+            update={"evidence_references": ("invented:evidence",)}
+        )
+        output = output.model_copy(update={"assessments": (first, *output.assessments[1:])})
+    else:
+        output = output.model_copy(update={"evidence_references": ("invented:evidence",)})
     with pytest.raises(MishkanError) as error:
         CrewAITeamHealthEvaluator.compile(
             plan,
-            _output().model_copy(update={"evidence_references": ("invented:evidence",)}),
+            output,
             evaluator_identity="Product_Functional_Evaluator",
             interval_started_at=now - timedelta(minutes=10),
             interval_ended_at=now,
@@ -150,6 +180,56 @@ def test_crewai_evaluation_rejects_invented_evidence() -> None:
             model_route="planning",
         )
     assert error.value.envelope.code is ErrorCode.PLAN
+
+
+def test_fenced_json_is_validated_without_accepting_surrounding_commentary() -> None:
+    fenced = f"```json\n{_interpretation().model_dump_json()}\n```"
+
+    assert CrewAITeamHealthEvaluator._parse_raw_output(fenced) == _interpretation()
+    with pytest.raises(ValueError):
+        CrewAITeamHealthEvaluator._parse_raw_output(
+            f"Commentary before JSON\n{_interpretation().model_dump_json()}"
+        )
+
+
+def test_missing_model_dimension_is_normalized_as_uncertain_with_lineage() -> None:
+    interpretation = _interpretation().model_copy(
+        update={
+            "assessments": _interpretation().assessments[:-1],
+            "limitations": (),
+            "status": TeamHealthStatus.HEALTHY,
+        }
+    )
+
+    normalized = CrewAITeamHealthEvaluator._normalize_interpretation(
+        interpretation,
+        evidence_references=("artifact:team-evidence",),
+    )
+
+    assert len(normalized.assessments) == 7
+    assert normalized.assessments[-1].status is TeamHealthStatus.UNCERTAIN
+    assert normalized.status is TeamHealthStatus.ATTENTION
+    assert "resource_efficiency" in normalized.limitations[0]
+    assert all(
+        item.evidence_references == ("artifact:team-evidence",) for item in normalized.assessments
+    )
+
+
+def test_validation_feedback_exposes_locations_without_rejected_values() -> None:
+    canary = "rejected-secret-canary"
+    with pytest.raises(ValidationError) as caught:
+        TeamHealthAssessmentOutput.model_validate(
+            {
+                **_output().model_dump(mode="python"),
+                "assessments": (),
+                "limitations": (canary,),
+            }
+        )
+
+    feedback = CrewAITeamHealthEvaluator._validation_feedback(caught.value)
+
+    assert "assessments" in feedback
+    assert canary not in feedback
 
 
 def test_model_failure_yields_uncertain_instead_of_fabricated_health(

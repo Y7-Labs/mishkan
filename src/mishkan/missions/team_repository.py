@@ -501,6 +501,10 @@ class SQLiteTeamEffectivenessRepository:
             )
         if decision.disposition.value != "approval_required":
             return
+        # Imported only at the governance boundary to avoid a package cycle:
+        # conversation contracts reference mission state models.
+        from mishkan.conversations.models import DecisionStatus, MissionDecision
+
         for reference in decision.approval_references:
             prefix, separator, raw_identity = reference.partition(":")
             if prefix != "decision" or not separator:
@@ -521,11 +525,17 @@ class SQLiteTeamEffectivenessRepository:
                     ErrorCode.DECISION_VALIDATION,
                     "material adaptation approval does not belong to the mission",
                 )
-            approval = json.loads(decision_row.payload)
-            if not isinstance(approval, dict) or approval.get("decision_status") != "accepted":
+            approval = MissionDecision.model_validate_json(decision_row.payload)
+            if approval.decision_status is not DecisionStatus.ACCEPTED:
                 raise MishkanError(
                     ErrorCode.DECISION_VALIDATION,
                     "material adaptation requires an accepted mission decision",
+                )
+            executive = approval.deciding_identity or approval.actor_id
+            if executive not in {"PM", "CTO"} and not executive.casefold().startswith("ceo"):
+                raise MishkanError(
+                    ErrorCode.AUTHORITY_NOT_GRANTED,
+                    "material adaptation requires PM, CTO, or CEO authority",
                 )
 
     @staticmethod

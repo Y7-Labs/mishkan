@@ -5,6 +5,23 @@ from typing import Literal
 import pytest
 from pydantic import ValidationError
 
+from mishkan.conversations import (
+    ChannelClass,
+    ConversationChannel,
+    DecisionAlternative,
+    DecisionContext,
+    DecisionContextElement,
+    DecisionCriterion,
+    DecisionCriterionAssessment,
+    DecisionEvidenceClaim,
+    DecisionEvidenceClass,
+    DecisionRecommendation,
+    DecisionStatus,
+    DecisionValidation,
+    DecisionValidationStatus,
+    MissionDecision,
+    SQLiteConversationRepository,
+)
 from mishkan.domain.errors import ErrorCode, MishkanError
 from mishkan.domain.identity import new_id
 from mishkan.domain.time import utc_now
@@ -264,6 +281,155 @@ def _evaluation(plan: MissionCollaborationPlan, *, cursor: int = 10) -> TeamHeal
     )
 
 
+def _record_material_approval(
+    database: Path,
+    mission: MissionRecord,
+    *,
+    decided_by: str,
+) -> MissionDecision:
+    conversations = SQLiteConversationRepository(database)
+    channel = conversations.create_channel(
+        ConversationChannel(
+            channel_class=ChannelClass.MISSION,
+            title="Mission crew adaptation",
+            participants=("CEO", "PM", "CTO", "Backend_Service_Engineer"),
+            mission_id=mission.mission_id,
+            created_by="PM",
+        )
+    )
+    evidence_reference = "evidence:team-health-evaluation"
+    context = DecisionContext(
+        question="Should the mission collaboration authority change?",
+        objective_reference="objective:account-recovery",
+        effective_policy_reference="policy:mission",
+        requirements=(
+            DecisionContextElement(
+                statement="Preserve explicit executive authority",
+                provenance_reference="requirement:MSN-022",
+            ),
+        ),
+        repository_evidence=(
+            DecisionContextElement(
+                statement="Current team evidence is attributable",
+                provenance_reference=evidence_reference,
+            ),
+        ),
+        constraints=(
+            DecisionContextElement(
+                statement="Do not expand authority silently",
+                provenance_reference="constraint:governance",
+            ),
+        ),
+        declared_preferences=(
+            DecisionContextElement(
+                statement="Repair the smallest affected scope",
+                provenance_reference="preference:bounded-change",
+            ),
+        ),
+        risks=(
+            DecisionContextElement(
+                statement="A material change could weaken independence",
+                provenance_reference="risk:independence",
+            ),
+        ),
+        material_unknowns=(
+            DecisionContextElement(
+                statement="The benefit after adaptation remains forecast",
+                provenance_reference="unknown:benefit",
+            ),
+        ),
+    )
+    criterion = DecisionCriterion(
+        criterion_id="authority",
+        description="Preserve explicit executive authority",
+        provenance_references=("requirement:MSN-022",),
+    )
+
+    def alternative(option_id: str, description: str) -> DecisionAlternative:
+        return DecisionAlternative(
+            option_id=option_id,
+            description=description,
+            credible=True,
+            assessments=(
+                DecisionCriterionAssessment(
+                    criterion_id=criterion.criterion_id,
+                    assessment=f"{description} preserves recorded authority",
+                    evidence_references=(evidence_reference,),
+                ),
+            ),
+        )
+
+    staged = MissionDecision(
+        schema_version="1.1",
+        mission_id=mission.mission_id,
+        conversation_id=channel.conversation_id,
+        actor_id="PM",
+        producer_identity="PM",
+        subject="Material crew adaptation",
+        disposition=DecisionStatus.STAGED.value,
+        decision_status=DecisionStatus.STAGED,
+        reason="The change requires an independently validated executive decision",
+        scope=(f"mission:{mission.mission_id}",),
+        evidence_references=(evidence_reference,),
+        authority_reference="authority:mission-executive",
+        changes_durable_authority=True,
+        context=context,
+        evidence=(
+            DecisionEvidenceClaim(
+                claim="The health evaluation identifies a material collaboration risk",
+                classification=DecisionEvidenceClass.VERIFIED,
+                source_reference=evidence_reference,
+            ),
+        ),
+        criteria=(criterion,),
+        alternatives=(
+            alternative("retain-plan", "Retain the accepted collaboration plan"),
+            alternative("change-scope", "Authorize the bounded material scope change"),
+        ),
+        alternatives_search="Compared retaining the plan with the requested scope change",
+        recommendation=DecisionRecommendation(
+            recommended_option_id="change-scope",
+            rationale="The evidence supports a recorded material scope change",
+            tradeoffs=("The collaboration plan must be reviewed again",),
+            risks=("The expected benefit may not materialize",),
+            confidence=0.8,
+            confidence_basis="Independent team evidence is available",
+            unresolved_questions=("Will the revised scope reduce rework?",),
+            expected_consequences=("Only approved work receives new scope",),
+            reversal_or_migration=("Record a superseding plan decision",),
+        ),
+        validation=DecisionValidation(
+            validation_type="independent evidence review",
+            planned_evidence=("Review team-health and assignment evidence",),
+            status=DecisionValidationStatus.PENDING,
+            findings=("Independent validation is pending",),
+        ),
+    )
+    conversations.record_decision(staged)
+    accepted = staged.model_copy(
+        update={
+            "decision_id": new_id(),
+            "actor_id": decided_by,
+            "deciding_identity": decided_by,
+            "disposition": DecisionStatus.ACCEPTED.value,
+            "decision_status": DecisionStatus.ACCEPTED,
+            "supersedes_decision_id": staged.decision_id,
+            "reason": "Independent evidence supports the governed material adaptation",
+            "validation": staged.validation.model_copy(
+                update={
+                    "status": DecisionValidationStatus.PASSED,
+                    "evaluator_identity": "Product_Functional_Evaluator",
+                    "evidence_references": (evidence_reference,),
+                    "findings": ("The adaptation remains inside the recorded mission scope",),
+                }
+            ),
+        }
+    )
+    accepted = MissionDecision.model_validate(accepted.model_dump(mode="json"))
+    conversations.record_decision(accepted)
+    return accepted
+
+
 def test_smallest_shape_keeps_one_production_owner_with_independent_assurance(
     tmp_path: Path,
 ) -> None:
@@ -293,6 +459,78 @@ def test_multi_agent_production_requires_a_reason_and_interaction_graph(tmp_path
 
     with pytest.raises(ValidationError, match="collaboration rationale"):
         MissionCollaborationPlan.model_validate(payload)
+
+
+def test_composition_fixtures_make_multi_agent_value_and_cost_explicit(tmp_path: Path) -> None:
+    _, _, mission, brief, crew = _mission_context(tmp_path)
+    single_owner = _plan(mission, brief, crew)
+    base = single_owner.model_dump(mode="python")
+    specialist = CollaborationResponsibility(
+        identity_id="Integration_SDK_Engineer",
+        responsibility="Own the client compatibility work",
+        decision_rights=("assignment:production",),
+    )
+    consultative = MissionCollaborationPlan.model_validate(
+        {
+            **base,
+            "plan_id": new_id(),
+            "production_shape": ProductionShape.CONSULTATIVE,
+            "collaboration_reasons": (
+                "Distinct SDK expertise reduces compatibility risk without adding another owner",
+            ),
+            "responsibilities": (*single_owner.responsibilities, specialist),
+            "interactions": (
+                *single_owner.interactions,
+                CollaborationEdge(
+                    source_identity="Backend_Service_Engineer",
+                    target_identity="Integration_SDK_Engineer",
+                    interaction=CollaborationInteraction.CONSULT,
+                    purpose="Challenge the recovery API compatibility assumptions",
+                    artifact_contracts=("artifact:api-contract",),
+                ),
+            ),
+            "communication_budget": MissionResourceLimit(
+                name="coordination_messages", value=24, unit="message"
+            ),
+        }
+    )
+    multi_producer = MissionCollaborationPlan.model_validate(
+        {
+            **consultative.model_dump(mode="python"),
+            "plan_id": new_id(),
+            "production_shape": ProductionShape.MULTI_PRODUCER,
+            "production_owner_ids": (
+                "Backend_Service_Engineer",
+                "Integration_SDK_Engineer",
+            ),
+            "collaboration_reasons": (
+                "Independent backend and SDK work is parallelizable",
+                "Distinct ownership covers both required product surfaces",
+            ),
+            "interactions": (
+                *consultative.interactions,
+                CollaborationEdge(
+                    source_identity="Backend_Service_Engineer",
+                    target_identity="Integration_SDK_Engineer",
+                    interaction=CollaborationInteraction.COLLABORATE,
+                    purpose="Coordinate the shared versioned API contract",
+                    artifact_contracts=("artifact:api-contract",),
+                ),
+            ),
+            "communication_budget": MissionResourceLimit(
+                name="coordination_messages", value=32, unit="message"
+            ),
+        }
+    )
+
+    assert single_owner.production_owner_ids == ("Backend_Service_Engineer",)
+    assert consultative.production_owner_ids == single_owner.production_owner_ids
+    assert any(
+        edge.interaction is CollaborationInteraction.CONSULT for edge in consultative.interactions
+    )
+    assert len(multi_producer.production_owner_ids) == 2
+    assert multi_producer.collaboration_reasons
+    assert multi_producer.communication_budget.value > single_owner.communication_budget.value
 
 
 def test_health_is_multidimensional_independent_and_never_a_composite_score(
@@ -612,14 +850,38 @@ def test_repository_persists_immutable_lineage_signals_and_handoffs(tmp_path: Pa
         required_next_action="Evaluate recovery behavior and security boundaries",
         acceptance_conditions=("Independent recovery tests pass",),
     )
+    retrospective = MissionRetrospective(
+        mission_id=mission.mission_id,
+        collaboration_plan_version=plan.version,
+        trigger="explicit_request",
+        expected_outcomes=(brief.desired_outcome,),
+        observed_outcomes=("The accepted collaboration evidence is preserved",),
+        successful_patterns=("Explicit responsibility and handoff contracts",),
+        failed_patterns=(),
+        contradictions=(),
+        rework=(),
+        coordination_costs=("One independent milestone evaluation",),
+        proposals=(
+            RetrospectiveProposal(
+                destination="mission_template",
+                summary="Propose the verified handoff pattern for later review",
+                evidence_references=("artifact:retrospective-evidence",),
+            ),
+        ),
+        non_promoted_findings=("No proposal was activated by this retrospective",),
+        evidence_references=("artifact:retrospective-evidence",),
+        authored_by="Technical_Change_Reporter",
+    )
     assert repository.record_signal(signal) == signal
     assert repository.record_handoff(handoff) == handoff
+    assert repository.record_retrospective(retrospective) == retrospective
 
     assert repository.collaboration_plan(str(mission.mission_id)) == plan
     assert repository.health(str(mission.mission_id)) == (evaluation,)
     assert repository.signals(str(mission.mission_id)) == (signal,)
     assert repository.handoffs(str(mission.mission_id)) == (handoff,)
     assert repository.adaptations(str(mission.mission_id)) == (adaptation,)
+    assert repository.retrospectives(str(mission.mission_id)) == (retrospective,)
     projection = repository.snapshot()
     assert projection["attention_required"] == 0
     event_types = [
@@ -632,6 +894,99 @@ def test_repository_persists_immutable_lineage_signals_and_handoffs(tmp_path: Pa
     assert "mission.team_health_evaluated" in event_types
     assert "mission.team_signal_recorded" in event_types
     assert "mission.handoff_recorded" in event_types
+    assert "mission.retrospective_recorded" in event_types
+
+
+def test_material_adaptation_requires_an_accepted_executive_decision(tmp_path: Path) -> None:
+    database, missions, mission, brief, crew = _mission_context(tmp_path)
+    repository = SQLiteTeamEffectivenessRepository(database)
+    plan = _plan(mission, brief, crew)
+    repository.record_collaboration_plan(plan)
+    assignment = _assignment(plan, "material-scope-change")
+    missions.record_assignment(assignment)
+
+    def adaptation(reference: str) -> CrewAdaptationDecision:
+        return CrewAdaptationDecision(
+            mission_id=mission.mission_id,
+            detected_condition="The accepted task scope cannot cover the verified change",
+            considered_alternatives=("Retain scope", "Authorize a material scope change"),
+            expected_benefit="Align task authority with the accepted mission outcome",
+            adaptation_kinds=(AdaptationKind.CHANGE_MATERIAL_SCOPE,),
+            affected_task_ids=(assignment.task_id,),
+            affected_assignments=(assignment.assignment_id,),
+            authority_basis=("collaboration-plan:1",),
+            disposition=AdaptationDisposition.APPROVAL_REQUIRED,
+            before_crew_version=1,
+            after_crew_version=1,
+            before_plan_version=1,
+            after_plan_version=1,
+            approval_references=(reference,),
+            evidence_references=("team-health:evaluation-1",),
+            decided_by="PM",
+        )
+
+    non_executive = _record_material_approval(
+        database,
+        mission,
+        decided_by="Backend_Service_Engineer",
+    )
+    with pytest.raises(MishkanError) as unauthorized:
+        repository.record_adaptation(adaptation(f"decision:{non_executive.decision_id}"))
+    assert unauthorized.value.envelope.code is ErrorCode.AUTHORITY_NOT_GRANTED
+
+    executive = _record_material_approval(database, mission, decided_by="CTO")
+    governed = adaptation(f"decision:{executive.decision_id}").model_copy(
+        update={"decision_id": new_id()}
+    )
+    assert repository.record_adaptation(governed) == governed
+
+
+def test_collaboration_history_rejects_unproven_lineage(tmp_path: Path) -> None:
+    database, _, mission, brief, crew = _mission_context(tmp_path)
+    repository = SQLiteTeamEffectivenessRepository(database)
+    citation = CollaborationHistoryCitation(
+        project_id="project:other",
+        mission_id=new_id(),
+        task_ids=("prior-task",),
+        evaluation_ids=(new_id(),),
+        comparability=EvidenceComparability.DIRECT,
+        rationale="Claimed similar mission without persisted evidence",
+        evaluated_at=utc_now(),
+    )
+    plan = _plan(mission, brief, crew).model_copy(update={"history_citations": (citation,)})
+
+    with pytest.raises(MishkanError) as invalid:
+        repository.record_collaboration_plan(plan)
+    assert invalid.value.envelope.code is ErrorCode.DECISION_VALIDATION
+
+
+def test_retrospective_author_must_be_independent_reporting_or_audit(
+    tmp_path: Path,
+) -> None:
+    database, _, mission, brief, crew = _mission_context(tmp_path)
+    repository = SQLiteTeamEffectivenessRepository(database)
+    plan = _plan(mission, brief, crew)
+    repository.record_collaboration_plan(plan)
+    record = MissionRetrospective(
+        mission_id=mission.mission_id,
+        collaboration_plan_version=plan.version,
+        trigger="major_failure",
+        expected_outcomes=(brief.desired_outcome,),
+        observed_outcomes=("The mission encountered a major failure",),
+        successful_patterns=(),
+        failed_patterns=("The production path failed",),
+        contradictions=(),
+        rework=("A replacement implementation is required",),
+        coordination_costs=("One failed production attempt",),
+        proposals=(),
+        non_promoted_findings=("Failure remains evidence, not an automatic penalty",),
+        evidence_references=("artifact:failure-evidence",),
+        authored_by="Backend_Service_Engineer",
+    )
+
+    with pytest.raises(MishkanError) as conflict:
+        repository.record_retrospective(record)
+    assert conflict.value.envelope.code is ErrorCode.ROLE_CONFLICT
 
 
 def test_health_cursor_and_record_identity_are_monotone(tmp_path: Path) -> None:

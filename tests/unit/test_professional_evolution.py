@@ -17,6 +17,7 @@ from mishkan.domain.time import utc_now
 from mishkan.missions import SQLiteMissionRepository
 from mishkan.organization import (
     LearningScopeLevel,
+    ProfessionalEvidenceAttribution,
     ProfessionalEvidenceKind,
     ProfessionalEvidenceOutcome,
     ProfessionalEvidenceRecord,
@@ -170,6 +171,51 @@ def test_stale_or_non_demonstrated_evidence_cannot_authorize_promotion(
             reason="This attempted promotion lacks demonstrated evidence",
         )
     assert error.value.envelope.code is ErrorCode.AUTHORIZATION_MISSING
+
+
+def test_aggregate_team_evidence_cannot_promote_individual_competence(
+    tmp_path: Path,
+) -> None:
+    repository = _repositories(tmp_path)
+    team_evidence = repository.record_evidence(
+        _evidence(outcome=ProfessionalEvidenceOutcome.DEMONSTRATED).model_copy(
+            update={
+                "attribution": ProfessionalEvidenceAttribution.TEAM_AGGREGATE,
+                "source_references": ("team-health:evaluation-1",),
+                "evaluation_references": ("team-health:evaluation-1",),
+                "rationale": "The mission crew performed well as a whole",
+            }
+        )
+    )
+    request = ProfessionalPromotionRequest(
+        identity_id=team_evidence.identity_id,
+        kind=team_evidence.kind,
+        subject=team_evidence.subject,
+        source_scope=team_evidence.scope,
+        target_scope=_scope(LearningScopeLevel.PROJECT, "project:api"),
+        supporting_evidence_ids=(team_evidence.evidence_id,),
+        requested_by="PM",
+        rationale="Test that team health cannot silently become individual mastery",
+    )
+
+    with pytest.raises(MishkanError) as error:
+        repository.decide_promotion(
+            request,
+            disposition=ProfessionalPromotionDisposition.ACCEPTED,
+            decided_by="CTO",
+            policy_fingerprint="f" * 64,
+            reason="Aggregate team evidence is not individual competence evidence",
+        )
+
+    assert error.value.envelope.code is ErrorCode.AUTHORIZATION_MISSING
+    assert repository.evidence(team_evidence.identity_id) == (team_evidence,)
+    state = repository.competence_state(
+        team_evidence.identity_id,
+        kind=team_evidence.kind,
+        subject=team_evidence.subject,
+    )
+    assert state.effective_scope is None
+    assert state.fresh_supporting_evidence_ids == ()
 
 
 def test_competence_scope_expires_without_erasing_promotion_history(

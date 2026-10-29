@@ -11,6 +11,14 @@
       "title": "LearningScopeLevel",
       "type": "string"
     },
+    "ProfessionalEvidenceAttribution": {
+      "enum": [
+        "individual_result",
+        "team_aggregate"
+      ],
+      "title": "ProfessionalEvidenceAttribution",
+      "type": "string"
+    },
     "ProfessionalEvidenceKind": {
       "enum": [
         "project_knowledge",
@@ -54,6 +62,10 @@
   },
   "additionalProperties": false,
   "properties": {
+    "attribution": {
+      "$ref": "#/$defs/ProfessionalEvidenceAttribution",
+      "default": "individual_result"
+    },
     "critical": {
       "title": "Critical",
       "type": "boolean"

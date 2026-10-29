@@ -31,6 +31,11 @@ class ProfessionalEvidenceOutcome(StrEnum):
     CONTRADICTED = "contradicted"
 
 
+class ProfessionalEvidenceAttribution(StrEnum):
+    INDIVIDUAL_RESULT = "individual_result"
+    TEAM_AGGREGATE = "team_aggregate"
+
+
 class LearningScopeLevel(StrEnum):
     MISSION = "mission"
     PROJECT = "project"
@@ -64,6 +69,7 @@ class ProfessionalEvidenceRecord(ProfessionalEvolutionModel):
     subject: str = Field(min_length=1, max_length=512)
     scope: ProfessionalLearningScope
     outcome: ProfessionalEvidenceOutcome
+    attribution: ProfessionalEvidenceAttribution = ProfessionalEvidenceAttribution.INDIVIDUAL_RESULT
     critical: bool
     source_references: tuple[str, ...] = Field(min_length=1)
     evaluation_references: tuple[str, ...] = Field(min_length=1)
