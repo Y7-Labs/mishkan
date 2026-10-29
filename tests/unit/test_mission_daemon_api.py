@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -27,6 +28,7 @@ from mishkan.crewai.mission_environment import (
     MissionEnvironmentPlanningOutput,
 )
 from mishkan.crewai.mission_governance import (
+    CrewAICollaborationProposal,
     CrewAIGovernanceLineage,
     MissionGovernanceEvidence,
     MissionGovernanceRequest,
@@ -42,11 +44,16 @@ from mishkan.environment import (
     EnvironmentOutcome,
 )
 from mishkan.missions import (
+    AdaptationKind,
+    CollaborationEdge,
+    CollaborationInteraction,
+    CollaborationResponsibility,
     CrewAssignmentKind,
     CrewSelectionEvidence,
     ExecutiveConfirmation,
     MissionBrief,
     MissionBriefStatus,
+    MissionCollaborationPlan,
     MissionCrewMember,
     MissionCrewRevision,
     MissionEnvironmentAlternative,
@@ -67,7 +74,14 @@ from mishkan.missions import (
     MissionTaskAssignment,
     MissionTaskClaimRequest,
     MissionTransition,
+    ProductionShape,
     SQLiteMissionRepository,
+    TeamDimension,
+    TeamDimensionAssessment,
+    TeamHealthEvaluation,
+    TeamHealthEvaluationRequest,
+    TeamHealthStatus,
+    TeamSignal,
 )
 from mishkan.organization import load_canonical_organization
 from mishkan.persistence import LocalRunRepository
@@ -217,6 +231,19 @@ class _MissionGovernanceRunner:
             mission=mission,
             brief=brief,
             crew=_crew(brief),
+            collaboration=CrewAICollaborationProposal(
+                production_shape=ProductionShape.SINGLE_OWNER,
+                production_owner_ids=("Backend_Service_Engineer",),
+                alternatives=("single owner with independent assurance",),
+                interactions=(
+                    CollaborationEdge(
+                        source_identity="Backend_Service_Engineer",
+                        target_identity="Product_Functional_Evaluator",
+                        interaction=CollaborationInteraction.HANDOFF,
+                        purpose="Submit production evidence for evaluation",
+                    ),
+                ),
+            ),
             lineage=CrewAIGovernanceLineage(
                 pm_model_route="fixture-pm",
                 cto_model_route="fixture-cto",
@@ -261,6 +288,182 @@ class _MissionEnvironmentRunner:
             plan_version=plan_version,
             model_route="planning",
         )
+
+
+class _TeamHealthEvaluator:
+    def evaluate(
+        self,
+        plan: MissionCollaborationPlan,
+        _signals: tuple[TeamSignal, ...],
+        *,
+        evaluator_identity: str,
+        interval_started_at: datetime,
+        interval_ended_at: datetime,
+        evidence_cursor: int,
+        evidence_references: tuple[str, ...],
+    ) -> TeamHealthEvaluation:
+        return TeamHealthEvaluation(
+            mission_id=plan.mission_id,
+            collaboration_plan_version=plan.version,
+            interval_started_at=interval_started_at,
+            interval_ended_at=interval_ended_at,
+            evidence_cursor=evidence_cursor,
+            assessments=tuple(
+                TeamDimensionAssessment(
+                    dimension=dimension,
+                    status=TeamHealthStatus.HEALTHY,
+                    observations=(f"Fixture evidence covers {dimension.value}",),
+                    evidence_references=evidence_references,
+                )
+                for dimension in TeamDimension
+            ),
+            strengths=("Clear outcome and ownership",),
+            risks=(),
+            limitations=("Deterministic daemon fixture",),
+            confidence_basis="Every dimension cites the request evidence",
+            status=TeamHealthStatus.HEALTHY,
+            evaluator_identity=evaluator_identity,
+            evidence_references=evidence_references,
+        )
+
+
+@pytest.mark.anyio
+async def test_collaboration_plan_uses_command_query_snapshot_and_event_surfaces(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    paths = DaemonBootstrap().setup(config)
+    token = TokenFile(paths.token_file).read()
+    headers = {"Authorization": f"Bearer {token.token}"}
+    organization = load_canonical_organization()
+    mission = MissionRecord(
+        origin=MissionOrigin(
+            kind=MissionOriginKind.CEO,
+            actor_id="ceo:y4nn777",
+            objective="Add durable account recovery",
+        ),
+        organization_id=organization.organization_id,
+        organization_version=organization.organization_version,
+    )
+    brief = _brief(mission)
+    crew = _crew(brief)
+    plan = MissionCollaborationPlan(
+        mission_id=mission.mission_id,
+        version=1,
+        brief_version=brief.version,
+        crew_version=crew.version,
+        production_shape=ProductionShape.SINGLE_OWNER,
+        production_owner_ids=("Backend_Service_Engineer",),
+        proposal_author_identity="PM",
+        crewai_coordination_reference="coordination:crewai:daemon-fixture",
+        alternatives=("single owner with downstream independent assurance",),
+        shared_outcome=brief.desired_outcome,
+        user_impact="Users can recover access without an unreviewed security regression",
+        responsibilities=tuple(
+            CollaborationResponsibility(
+                identity_id=member.identity_id,
+                responsibility=member.responsibility,
+                decision_rights=(f"assignment:{member.assignment_kind.value}",),
+            )
+            for member in crew.members
+        ),
+        interactions=(
+            CollaborationEdge(
+                source_identity="Backend_Service_Engineer",
+                target_identity="Product_Functional_Evaluator",
+                interaction=CollaborationInteraction.HANDOFF,
+                purpose="Provide production evidence for independent evaluation",
+            ),
+        ),
+        context_references=("context-pack:mission:1",),
+        resource_budgets=(MissionResourceLimit(name="model_tokens", value=10_000, unit="token"),),
+        communication_budget=MissionResourceLimit(
+            name="coordination_messages", value=20, unit="message"
+        ),
+        escalation_conditions=("material scope or authority changes",),
+        permitted_adaptations=(AdaptationKind.REPAIR_CONTEXT,),
+        stop_conditions=("accepted outcome is impossible under current authority",),
+        pm_confirmation_id=crew.pm_composition_confirmation_id,
+        cto_confirmation_id=crew.cto_coverage_confirmation_id,
+    )
+    health_request = TeamHealthEvaluationRequest(
+        mission_id=mission.mission_id,
+        collaboration_plan_version=plan.version,
+        interval_started_at=mission.created_at,
+        interval_ended_at=brief.created_at,
+        evidence_cursor=4,
+        evaluator_identity="Product_Functional_Evaluator",
+        evidence_references=("artifact:team-evidence",),
+    )
+    commands = (
+        ApplicationCommand(
+            command_type="mission.create",
+            actor_id=token.principal_id,
+            target_type="mission",
+            target_id=str(mission.mission_id),
+            expected_revision=0,
+            payload={"record": mission.model_dump(mode="json")},
+        ),
+        ApplicationCommand(
+            command_type="mission.brief.record",
+            actor_id=token.principal_id,
+            target_type="mission",
+            target_id=str(mission.mission_id),
+            expected_revision=1,
+            payload={"brief": brief.model_dump(mode="json")},
+        ),
+        ApplicationCommand(
+            command_type="mission.crew.record",
+            actor_id=token.principal_id,
+            target_type="mission",
+            target_id=str(mission.mission_id),
+            expected_revision=2,
+            payload={"crew": crew.model_dump(mode="json")},
+        ),
+        ApplicationCommand(
+            command_type="mission.collaboration.record",
+            actor_id=token.principal_id,
+            target_type="mission_collaboration",
+            target_id=str(plan.plan_id),
+            payload={"plan": plan.model_dump(mode="json")},
+        ),
+        ApplicationCommand(
+            command_type="mission.health.evaluate",
+            actor_id=token.principal_id,
+            target_type="team_health_evaluation",
+            target_id=str(health_request.request_id),
+            payload={"request": health_request.model_dump(mode="json")},
+        ),
+    )
+
+    transport = httpx.ASGITransport(
+        app=create_app(config, team_health_evaluator=_TeamHealthEvaluator())
+    )
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        for command in commands:
+            response = await client.post(
+                "/v1/commands", headers=headers, json=command.model_dump(mode="json")
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["status"] == "accepted"
+        collaboration = await client.get(
+            f"/v1/missions/{mission.mission_id}/collaboration", headers=headers
+        )
+        snapshot = await client.get("/v1/snapshot", headers=headers)
+        health = await client.get(f"/v1/missions/{mission.mission_id}/health", headers=headers)
+        events = await client.get(
+            "/v1/events",
+            headers=headers,
+            params={"entity_id": str(mission.mission_id)},
+        )
+
+    assert collaboration.status_code == 200
+    assert collaboration.json()["plan_id"] == str(plan.plan_id)
+    assert snapshot.json()["projections"]["team_effectiveness"]["collaboration_plans"]
+    assert health.json()[0]["status"] == "healthy"
+    assert "mission.collaboration_plan_recorded" in {
+        item["event_type"] for item in events.json()["events"]
+    }
 
 
 @pytest.mark.anyio
