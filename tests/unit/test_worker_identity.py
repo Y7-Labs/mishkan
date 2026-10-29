@@ -222,6 +222,39 @@ def test_rotation_supersedes_old_certificate_and_authenticates_only_current(
         assert current is not None and current.state == CertificateState.CURRENT.value
 
 
+def test_rotation_replay_recovers_the_same_bundle_after_response_loss(tmp_path: Path) -> None:
+    service, repository, _database = _service(tmp_path)
+    worker_id, _, original = _enroll(service)
+    _, csr = _csr()
+    request = WorkerRotationRequest(
+        worker_id=worker_id,
+        current_certificate_serial=original.certificate_serial,
+        certificate_signing_request_pem=csr,
+    )
+
+    replacement = service.rotate(request)
+
+    replay_identity, replay_serial = service.authenticate_rotation_peer(
+        original.certificate_pem,
+        request.id,
+    )
+    replay = service.rotate(request)
+    assert replay_identity.id == worker_id
+    assert replay_serial == original.certificate_serial
+    assert replay == replacement
+    assert repository.identity(worker_id).revision == 2
+
+    with pytest.raises(MishkanError, match="rotation certificate"):
+        service.authenticate_rotation_peer(original.certificate_pem, uuid4())
+
+    _, different_csr = _csr()
+    with pytest.raises(MishkanError) as reused:
+        service.rotate(
+            request.model_copy(update={"certificate_signing_request_pem": different_csr})
+        )
+    assert reused.value.envelope.code is ErrorCode.DUPLICATE_RESULT
+
+
 def test_revocation_is_individual_and_revision_guarded(tmp_path: Path) -> None:
     service, _, _ = _service(tmp_path)
     first_id, _, first = _enroll(service)

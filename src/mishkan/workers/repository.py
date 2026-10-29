@@ -18,6 +18,7 @@ from mishkan.persistence.runtime import DatabaseTarget
 from mishkan.persistence.sqlite import (
     AggregateRevisionRow,
     OutboxRow,
+    WorkerCertificateRotationRow,
     WorkerCertificateRow,
     WorkerEnrollmentTokenRow,
     WorkerIdentityRow,
@@ -214,10 +215,12 @@ class WorkerIdentityRepository:
     def rotate(
         self,
         *,
+        rotation_id: UUID,
         worker_id: UUID,
         current_serial: str,
+        request_fingerprint: str,
         certificate: SignedWorkerCertificate,
-    ) -> WorkerIdentity:
+    ) -> SignedWorkerCertificate:
         now = utc_now()
         with Session(self._engine) as session, session.begin():
             worker = session.scalar(
@@ -227,6 +230,18 @@ class WorkerIdentityRepository:
             )
             if worker is None or worker.state != WorkerState.ACTIVE.value:
                 raise MishkanError(ErrorCode.WORKER, "worker identity is not active")
+            existing = session.get(WorkerCertificateRotationRow, str(rotation_id))
+            if existing is not None:
+                if (
+                    existing.worker_id != str(worker_id)
+                    or existing.prior_serial != current_serial
+                    or existing.request_fingerprint != request_fingerprint
+                ):
+                    raise MishkanError(
+                        ErrorCode.DUPLICATE_RESULT,
+                        "worker rotation identity was reused for different content",
+                    )
+                return self._signed_rotation(session, existing)
             if worker.current_certificate_serial != current_serial:
                 raise MishkanError(ErrorCode.WORKER, "worker certificate is no longer current")
             previous = session.get(WorkerCertificateRow, current_serial)
@@ -235,6 +250,19 @@ class WorkerIdentityRepository:
             previous.state = CertificateState.SUPERSEDED.value
             previous.superseded_at = now.isoformat()
             session.add(self._certificate_row(worker_id, certificate))
+            session.flush()
+            session.add(
+                WorkerCertificateRotationRow(
+                    id=str(rotation_id),
+                    worker_id=str(worker_id),
+                    prior_serial=current_serial,
+                    certificate_serial=certificate.serial,
+                    request_fingerprint=request_fingerprint,
+                    certificate_pem=certificate.certificate_pem,
+                    certificate_authority_pem=certificate.certificate_authority_pem,
+                    created_at=now.isoformat(),
+                )
+            )
             worker.current_certificate_serial = certificate.serial
             worker.revision += 1
             worker.updated_at = now.isoformat()
@@ -254,7 +282,48 @@ class WorkerIdentityRepository:
                     "certificate_serial": certificate.serial,
                 },
             )
-        return self.identity(worker_id)
+        return certificate
+
+    def authenticate_rotation(
+        self,
+        worker_id: UUID,
+        serial: str,
+        fingerprint: str,
+        rotation_id: UUID,
+    ) -> WorkerIdentity:
+        """Allow a current certificate or the exact prior certificate to replay one rotation."""
+
+        now = utc_now()
+        with Session(self._engine) as session:
+            worker = session.get(WorkerIdentityRow, str(worker_id))
+            certificate = session.get(WorkerCertificateRow, serial)
+            if (
+                worker is None
+                or worker.state != WorkerState.ACTIVE.value
+                or certificate is None
+                or certificate.worker_id != str(worker_id)
+                or certificate.fingerprint != fingerprint
+                or datetime.fromisoformat(certificate.not_before) > now
+                or datetime.fromisoformat(certificate.not_after) <= now
+            ):
+                raise MishkanError(ErrorCode.WORKER, "worker certificate is not active")
+            if (
+                worker.current_certificate_serial == serial
+                and certificate.state == CertificateState.CURRENT.value
+            ):
+                return self._identity(worker)
+            rotation = session.get(WorkerCertificateRotationRow, str(rotation_id))
+            if (
+                certificate.state != CertificateState.SUPERSEDED.value
+                or rotation is None
+                or rotation.worker_id != str(worker_id)
+                or rotation.prior_serial != serial
+                or rotation.certificate_serial != worker.current_certificate_serial
+            ):
+                raise MishkanError(
+                    ErrorCode.WORKER, "worker rotation certificate is not authorized"
+                )
+            return self._identity(worker)
 
     def revoke_worker(self, worker_id: UUID, *, expected_revision: int) -> WorkerIdentity:
         with Session(self._engine) as session, session.begin():
@@ -371,6 +440,23 @@ class WorkerIdentityRepository:
             issued_at=utc_now().isoformat(),
             superseded_at=None,
             revoked_at=None,
+        )
+
+    @staticmethod
+    def _signed_rotation(
+        session: Session,
+        rotation: WorkerCertificateRotationRow,
+    ) -> SignedWorkerCertificate:
+        certificate = session.get(WorkerCertificateRow, rotation.certificate_serial)
+        if certificate is None:
+            raise MishkanError(ErrorCode.WORKER, "worker rotation certificate is missing")
+        return SignedWorkerCertificate(
+            certificate_pem=rotation.certificate_pem,
+            certificate_authority_pem=rotation.certificate_authority_pem,
+            serial=certificate.serial,
+            fingerprint_sha256=certificate.fingerprint,
+            not_before=datetime.fromisoformat(certificate.not_before),
+            not_after=datetime.fromisoformat(certificate.not_after),
         )
 
     @staticmethod

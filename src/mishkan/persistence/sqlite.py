@@ -1023,6 +1023,23 @@ class WorkerCertificateRow(Base):
     revoked_at: Mapped[str | None] = mapped_column(String(40))
 
 
+class WorkerCertificateRotationRow(Base):
+    __tablename__ = "worker_certificate_rotations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    worker_id: Mapped[str] = mapped_column(ForeignKey("worker_identities.id"), nullable=False)
+    prior_serial: Mapped[str] = mapped_column(
+        ForeignKey("worker_certificates.serial"), nullable=False
+    )
+    certificate_serial: Mapped[str] = mapped_column(
+        ForeignKey("worker_certificates.serial"), unique=True, nullable=False
+    )
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    certificate_pem: Mapped[str] = mapped_column(Text, nullable=False)
+    certificate_authority_pem: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
 class WorkerHeartbeatRow(Base):
     __tablename__ = "worker_heartbeats"
 

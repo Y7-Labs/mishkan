@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from datetime import timedelta
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from pydantic import SecretStr
@@ -83,17 +83,27 @@ class WorkerEnrollmentService:
         return self._bundle(request.worker_id, certificate)
 
     def rotate(self, request: WorkerRotationRequest) -> WorkerCertificateBundle:
+        request_fingerprint = hashlib.sha256(
+            request.certificate_signing_request_pem.encode()
+        ).hexdigest()
         certificate = self._certificate_authority.sign_worker_csr(
             request.worker_id,
             request.certificate_signing_request_pem,
             lifetime_seconds=self._certificate_ttl_seconds,
         )
-        self._repository.rotate(
+        persisted = self._repository.rotate(
+            rotation_id=request.id,
             worker_id=request.worker_id,
             current_serial=request.current_certificate_serial,
+            request_fingerprint=request_fingerprint,
             certificate=certificate,
         )
-        return self._bundle(request.worker_id, certificate)
+        return self._bundle(
+            request.worker_id,
+            persisted,
+            bundle_id=request.id,
+            created_at=request.created_at,
+        )
 
     def revoke_worker(self, worker_id: UUID, *, expected_revision: int) -> WorkerIdentity:
         return self._repository.revoke_worker(worker_id, expected_revision=expected_revision)
@@ -108,12 +118,33 @@ class WorkerEnrollmentService:
         )
         return self._repository.authenticate(worker_id, serial, fingerprint), serial
 
+    def authenticate_rotation_peer(
+        self,
+        certificate_pem: str,
+        rotation_id: UUID,
+    ) -> tuple[WorkerIdentity, str]:
+        worker_id, serial, fingerprint = self._certificate_authority.inspect_worker_certificate(
+            certificate_pem
+        )
+        return (
+            self._repository.authenticate_rotation(
+                worker_id,
+                serial,
+                fingerprint,
+                rotation_id,
+            ),
+            serial,
+        )
+
     def _bundle(
         self,
         worker_id: UUID,
         certificate: SignedWorkerCertificate,
+        *,
+        bundle_id: UUID | None = None,
+        created_at: datetime | None = None,
     ) -> WorkerCertificateBundle:
-        return WorkerCertificateBundle(
+        bundle = WorkerCertificateBundle(
             worker_id=worker_id,
             certificate_pem=certificate.certificate_pem,
             certificate_authority_pem=certificate.certificate_authority_pem,
@@ -122,6 +153,9 @@ class WorkerEnrollmentService:
             not_before=certificate.not_before,
             not_after=certificate.not_after,
         )
+        if bundle_id is not None and created_at is not None:
+            return bundle.model_copy(update={"id": bundle_id, "created_at": created_at})
+        return bundle
 
     @staticmethod
     def _digest(secret: str) -> str:

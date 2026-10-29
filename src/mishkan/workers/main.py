@@ -34,6 +34,10 @@ def _parser() -> argparse.ArgumentParser:
     enroll.add_argument("--token-env", default="MISHKAN_WORKER_ENROLLMENT_TOKEN")
     enroll.add_argument("--timeout", type=float, default=120)
 
+    rotate = subcommands.add_parser("rotate", help="Rotate and recover the local mTLS identity.")
+    rotate.add_argument("--state-dir", type=Path, required=True)
+    rotate.add_argument("--timeout", type=float, default=120)
+
     for name in ("once", "run"):
         command = subcommands.add_parser(name)
         command.add_argument("--state-dir", type=Path, required=True)
@@ -104,6 +108,12 @@ def main() -> None:
                 enrollment_token=SecretStr(raw_token),
                 server_ca=arguments.server_ca,
                 timeout_seconds=arguments.timeout,
+            )
+            print(identity.model_dump_json(indent=2))
+            return
+        if arguments.command == "rotate":
+            identity = WorkerCredentialStore(arguments.state_dir).rotate(
+                timeout_seconds=arguments.timeout
             )
             print(identity.model_dump_json(indent=2))
             return

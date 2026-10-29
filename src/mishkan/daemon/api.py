@@ -1616,10 +1616,19 @@ def create_app(
                 ErrorCode.REQUIRED_DEPENDENCY,
                 "distributed worker identity is not configured",
             )
-        identity, serial = await _thread_call(authenticated_worker, request)
+        der = peer_certificate_der(request.scope)
+        certificate = x509.load_der_x509_certificate(der)
+        pem = certificate.public_bytes(serialization.Encoding.PEM).decode()
+        identity, serial = await _thread_call(
+            worker_enrollment.authenticate_rotation_peer,
+            pem,
+            rotation.id,
+        )
         return await _thread_call(
             worker_enrollment.rotate,
             WorkerRotationRequest(
+                id=rotation.id,
+                created_at=rotation.created_at,
                 worker_id=identity.id,
                 current_certificate_serial=serial,
                 certificate_signing_request_pem=rotation.certificate_signing_request_pem,
