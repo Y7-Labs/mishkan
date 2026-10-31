@@ -1,4 +1,4 @@
-# MISHKAN
+# MISHKAN ( POC - Experimental Agentic SWE Research  )
 
 [![CI](https://github.com/Y7-Labs/mishkan/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Y7-Labs/mishkan/actions/workflows/ci.yml)
 
