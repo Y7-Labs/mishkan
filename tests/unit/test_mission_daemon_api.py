@@ -44,11 +44,13 @@ from mishkan.environment import (
     EnvironmentOutcome,
 )
 from mishkan.missions import (
+    AdaptationDisposition,
     AdaptationKind,
     CollaborationEdge,
     CollaborationExecutionKind,
     CollaborationInteraction,
     CollaborationResponsibility,
+    CrewAdaptationDecision,
     CrewAssignmentKind,
     CrewSelectionEvidence,
     ExecutiveConfirmation,
@@ -411,6 +413,23 @@ async def test_collaboration_plan_uses_command_query_snapshot_and_event_surfaces
         evaluator_identity="Product_Functional_Evaluator",
         evidence_references=("artifact:team-evidence",),
     )
+    adaptation = CrewAdaptationDecision(
+        mission_id=mission.mission_id,
+        detected_condition="The evaluator needs repaired mission context",
+        considered_alternatives=("Pause evaluation", "Repair the shared context"),
+        expected_benefit="Restore common ground without expanding authority",
+        adaptation_kinds=(AdaptationKind.REPAIR_CONTEXT,),
+        affected_task_ids=(assignment.task_id,),
+        affected_assignments=(assignment.assignment_id,),
+        authority_basis=("collaboration-plan:1",),
+        disposition=AdaptationDisposition.BOUNDED,
+        before_crew_version=crew.version,
+        after_crew_version=crew.version,
+        before_plan_version=plan.version,
+        after_plan_version=plan.version,
+        evidence_references=("artifact:team-evidence",),
+        decided_by=token.principal_id,
+    )
     interaction_command_id = uuid4()
     explicit_interaction = MissionCollaborationExecution(
         mission_id=mission.mission_id,
@@ -469,13 +488,12 @@ async def test_collaboration_plan_uses_command_query_snapshot_and_event_surfaces
             payload={"request": health_request.model_dump(mode="json")},
         ),
         ApplicationCommand(
-            command_id=interaction_command_id,
-            command_type="mission.interaction.record",
+            command_type="mission.adaptation.record",
             actor_id=token.principal_id,
-            target_type="mission_interaction",
-            target_id=str(explicit_interaction.interaction_id),
+            target_type="crew_adaptation",
+            target_id=str(adaptation.decision_id),
             expected_revision=0,
-            payload={"interaction": explicit_interaction.model_dump(mode="json")},
+            payload={"decision": adaptation.model_dump(mode="json")},
         ),
     )
 
@@ -489,6 +507,34 @@ async def test_collaboration_plan_uses_command_query_snapshot_and_event_surfaces
             )
             assert response.status_code == 200, response.text
             assert response.json()["status"] == "accepted"
+        forged_interaction = await client.post(
+            "/v1/commands",
+            headers=headers,
+            json=ApplicationCommand(
+                command_id=interaction_command_id,
+                command_type="mission.interaction.record",
+                actor_id=token.principal_id,
+                target_type="mission_interaction",
+                target_id=str(explicit_interaction.interaction_id),
+                expected_revision=0,
+                payload={"interaction": explicit_interaction.model_dump(mode="json")},
+            ).model_dump(mode="json"),
+        )
+        poisoned_health_request = health_request.model_copy(
+            update={"request_id": uuid4(), "evidence_cursor": 1_000_000}
+        )
+        poisoned_health = await client.post(
+            "/v1/commands",
+            headers=headers,
+            json=ApplicationCommand(
+                command_type="mission.health.evaluate",
+                actor_id=token.principal_id,
+                target_type="team_health_evaluation",
+                target_id=str(poisoned_health_request.request_id),
+                expected_revision=0,
+                payload={"request": poisoned_health_request.model_dump(mode="json")},
+            ).model_dump(mode="json"),
+        )
         collaboration = await client.get(
             f"/v1/missions/{mission.mission_id}/collaboration", headers=headers
         )
@@ -496,6 +542,9 @@ async def test_collaboration_plan_uses_command_query_snapshot_and_event_surfaces
         health = await client.get(f"/v1/missions/{mission.mission_id}/health", headers=headers)
         interactions = await client.get(
             f"/v1/missions/{mission.mission_id}/interactions", headers=headers
+        )
+        adaptations = await client.get(
+            f"/v1/missions/{mission.mission_id}/adaptations", headers=headers
         )
         events = await client.get(
             "/v1/events",
@@ -506,9 +555,16 @@ async def test_collaboration_plan_uses_command_query_snapshot_and_event_surfaces
     assert collaboration.status_code == 200
     assert collaboration.json()["plan_id"] == str(plan.plan_id)
     assert snapshot.json()["projections"]["team_effectiveness"]["collaboration_plans"]
+    assert "cadence" in snapshot.json()["projections"]["team_effectiveness"]
     assert health.json()[0]["status"] == "healthy"
+    assert forged_interaction.status_code == 403
+    assert poisoned_health.status_code == 200
+    assert poisoned_health.json()["status"] == "refused"
+    assert poisoned_health.json()["error"]["code"] == ErrorCode.DECISION_VALIDATION.value
     assert interactions.status_code == 200
-    assert {item["kind"] for item in interactions.json()} == {"consult", "evaluate"}
+    assert {item["kind"] for item in interactions.json()} == {"evaluate"}
+    assert adaptations.status_code == 200
+    assert [item["decision_id"] for item in adaptations.json()] == [str(adaptation.decision_id)]
     assert all(item["task_ids"] == [assignment.task_id] for item in interactions.json())
     assert snapshot.json()["projections"]["team_effectiveness"]["collaboration_interactions"]
     assert "mission.collaboration_plan_recorded" in {

@@ -661,6 +661,19 @@ class SQLiteApplicationRepository:
                 events=events,
             )
 
+    def event_cursor_exists(self, cursor: int) -> bool:
+        if cursor < 1:
+            return False
+        with Session(self._engine) as session:
+            return (
+                session.scalar(select(OutboxRow.cursor).where(OutboxRow.cursor == cursor))
+                is not None
+            )
+
+    def event_exists(self, event_id: UUID) -> bool:
+        with Session(self._engine) as session:
+            return session.get(OutboxRow, str(event_id)) is not None
+
     def create_event_hold(
         self,
         *,

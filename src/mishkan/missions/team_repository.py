@@ -8,6 +8,7 @@ from uuid import UUID
 
 from pydantic import BaseModel
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from mishkan.domain.errors import ErrorCode, MishkanError
@@ -192,6 +193,22 @@ class SQLiteTeamEffectivenessRepository:
                 return self._idempotent(existing.payload, payload, record)
             plan = self._plan(session, str(record.mission_id), record.collaboration_plan_version)
             TeamEffectivenessValidator.retrospective(record, plan=plan)
+            mission = session.get(MissionRow, str(record.mission_id))
+            assert mission is not None
+            required_state = {
+                "mission_closure": MissionState.COMPLETED,
+                "major_failure": MissionState.FAILED,
+            }.get(record.trigger)
+            if required_state is not None and mission.state != required_state.value:
+                raise MishkanError(
+                    ErrorCode.DECISION_VALIDATION,
+                    "retrospective trigger does not match the durable mission state",
+                    details={
+                        "trigger": record.trigger,
+                        "required_state": required_state.value,
+                        "observed_state": mission.state,
+                    },
+                )
             session.add(
                 MissionRetrospectiveRow(
                     retrospective_id=str(record.retrospective_id),
@@ -283,51 +300,68 @@ class SQLiteTeamEffectivenessRepository:
         self, record: MissionCollaborationExecution
     ) -> MissionCollaborationExecution:
         payload = self._json(record)
-        with Session(self._engine) as session, session.begin():
-            existing = session.get(MissionCollaborationExecutionRow, str(record.interaction_id))
-            if existing is not None:
-                return self._idempotent(existing.payload, payload, record)
-            causal = session.scalar(
-                select(MissionCollaborationExecutionRow).where(
-                    MissionCollaborationExecutionRow.causal_reference == record.causal_reference
+        try:
+            with Session(self._engine) as session, session.begin():
+                existing = session.get(MissionCollaborationExecutionRow, str(record.interaction_id))
+                if existing is not None:
+                    return self._idempotent(existing.payload, payload, record)
+                causal = session.scalar(
+                    select(MissionCollaborationExecutionRow).where(
+                        MissionCollaborationExecutionRow.causal_reference == record.causal_reference
+                    )
                 )
-            )
-            if causal is not None:
-                return self._idempotent(causal.payload, payload, record)
-            plan = self._plan(
-                session,
-                str(record.mission_id),
-                record.collaboration_plan_version,
-            )
-            identities = {item.identity_id for item in plan.responsibilities}
-            if not set(record.participant_ids).issubset(identities):
-                raise MishkanError(
-                    ErrorCode.ROLE_CONFLICT,
-                    "collaboration execution names an identity outside the accepted plan",
+                if causal is not None:
+                    return self._idempotent(causal.payload, payload, record)
+                plan = self._plan(
+                    session,
+                    str(record.mission_id),
+                    record.collaboration_plan_version,
                 )
-            self._require_tasks(session, record.mission_id, record.task_ids)
-            session.add(
-                MissionCollaborationExecutionRow(
-                    interaction_id=str(record.interaction_id),
-                    mission_id=str(record.mission_id),
-                    collaboration_plan_version=record.collaboration_plan_version,
-                    kind=record.kind.value,
-                    causal_reference=record.causal_reference,
-                    payload=payload,
-                    occurred_at=record.occurred_at.isoformat(),
+                identities = {item.identity_id for item in plan.responsibilities}
+                if not set(record.participant_ids).issubset(identities):
+                    raise MishkanError(
+                        ErrorCode.ROLE_CONFLICT,
+                        "collaboration execution names an identity outside the accepted plan",
+                    )
+                self._require_tasks(session, record.mission_id, record.task_ids)
+                session.add(
+                    MissionCollaborationExecutionRow(
+                        interaction_id=str(record.interaction_id),
+                        mission_id=str(record.mission_id),
+                        collaboration_plan_version=record.collaboration_plan_version,
+                        kind=record.kind.value,
+                        causal_reference=record.causal_reference,
+                        payload=payload,
+                        occurred_at=record.occurred_at.isoformat(),
+                    )
                 )
-            )
-            self._event(
-                session,
-                record.mission_id,
-                "mission.collaboration_interaction_recorded",
-                {
-                    "interaction_id": str(record.interaction_id),
-                    "kind": record.kind.value,
-                    "task_ids": list(record.task_ids),
-                    "causal_reference": record.causal_reference,
-                },
-            )
+                self._event(
+                    session,
+                    record.mission_id,
+                    "mission.collaboration_interaction_recorded",
+                    {
+                        "interaction_id": str(record.interaction_id),
+                        "kind": record.kind.value,
+                        "task_ids": list(record.task_ids),
+                        "causal_reference": record.causal_reference,
+                    },
+                )
+        except IntegrityError as exc:
+            with Session(self._engine) as session:
+                existing = session.get(MissionCollaborationExecutionRow, str(record.interaction_id))
+                if existing is None:
+                    existing = session.scalar(
+                        select(MissionCollaborationExecutionRow).where(
+                            MissionCollaborationExecutionRow.causal_reference
+                            == record.causal_reference
+                        )
+                    )
+                if existing is not None:
+                    return self._idempotent(existing.payload, payload, record)
+            raise MishkanError(
+                ErrorCode.DUPLICATE_RESULT,
+                "collaboration execution conflicts with durable lineage",
+            ) from exc
         return record
 
     def collaboration_plan(
@@ -335,6 +369,46 @@ class SQLiteTeamEffectivenessRepository:
     ) -> MissionCollaborationPlan:
         with Session(self._engine) as session:
             return self._plan(session, mission_id, version)
+
+    def active_collaboration_plans(
+        self,
+        *,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> tuple[MissionCollaborationPlan, ...]:
+        if offset < 0 or limit < 1:
+            raise MishkanError(
+                ErrorCode.OUTPUT_CONTRACT,
+                "active collaboration-plan query bounds are invalid",
+            )
+        terminal_states = {
+            MissionState.COMPLETED.value,
+            MissionState.FAILED.value,
+            MissionState.CANCELLED.value,
+        }
+        with Session(self._engine) as session:
+            heads = (
+                select(
+                    MissionCollaborationPlanRow.mission_id.label("mission_id"),
+                    func.max(MissionCollaborationPlanRow.version).label("version"),
+                )
+                .join(MissionRow, MissionRow.id == MissionCollaborationPlanRow.mission_id)
+                .where(MissionRow.state.not_in(terminal_states))
+                .group_by(MissionCollaborationPlanRow.mission_id)
+                .subquery()
+            )
+            rows = session.scalars(
+                select(MissionCollaborationPlanRow)
+                .join(
+                    heads,
+                    (MissionCollaborationPlanRow.mission_id == heads.c.mission_id)
+                    & (MissionCollaborationPlanRow.version == heads.c.version),
+                )
+                .order_by(MissionCollaborationPlanRow.mission_id)
+                .offset(offset)
+                .limit(limit)
+            ).all()
+            return tuple(MissionCollaborationPlan.model_validate_json(row.payload) for row in rows)
 
     def health(self, mission_id: str, *, limit: int = 100) -> tuple[TeamHealthEvaluation, ...]:
         with Session(self._engine) as session:

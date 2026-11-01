@@ -33,6 +33,14 @@ class ProductionShape(StrEnum):
     MULTI_PRODUCER = "multi_producer"
 
 
+class CollaborationReason(StrEnum):
+    DISTINCT_EXPERTISE = "distinct_expertise"
+    INDEPENDENT_AUTHORITY = "independent_authority"
+    PARALLELIZABLE_WORK = "parallelizable_work"
+    CONTEXT_SEPARATION = "context_separation"
+    REQUIRED_ASSURANCE = "required_assurance"
+
+
 class CollaborationInteraction(StrEnum):
     DELEGATE = "delegate"
     COLLABORATE = "collaborate"
@@ -204,7 +212,7 @@ class MissionCollaborationPlan(TeamModel):
     crew_version: int = Field(ge=1)
     production_shape: ProductionShape
     production_owner_ids: tuple[str, ...] = Field(min_length=1)
-    collaboration_reasons: tuple[str, ...] = ()
+    collaboration_reasons: tuple[CollaborationReason, ...] = ()
     proposal_author_identity: str = Field(min_length=2, max_length=128)
     crewai_coordination_reference: str = Field(min_length=1, max_length=1_024)
     alternatives: tuple[str, ...] = Field(min_length=1)
@@ -249,6 +257,8 @@ class MissionCollaborationPlan(TeamModel):
             self.collaboration_reasons
         ):
             raise ValueError("multi-agent production requires a collaboration rationale")
+        if self.production_shape is ProductionShape.SINGLE_OWNER and self.collaboration_reasons:
+            raise ValueError("single-owner production cannot claim a multi-agent rationale")
         if self.production_shape is ProductionShape.CONSULTATIVE and not any(
             edge.interaction
             in {CollaborationInteraction.CONSULT, CollaborationInteraction.CHALLENGE}
@@ -257,6 +267,11 @@ class MissionCollaborationPlan(TeamModel):
             raise ValueError("consultative shape requires a consult or challenge edge")
         if self.production_shape is ProductionShape.MULTI_PRODUCER and not self.interactions:
             raise ValueError("multi-producer shape requires an explicit interaction graph")
+        if (
+            self.production_shape is ProductionShape.MULTI_PRODUCER
+            and CollaborationReason.PARALLELIZABLE_WORK not in self.collaboration_reasons
+        ):
+            raise ValueError("multi-producer shape requires proven parallelizable work")
         identities = {item.identity_id for item in self.responsibilities}
         if len(identities) != len(self.responsibilities):
             raise ValueError("collaboration responsibilities must be unique by identity")
@@ -300,6 +315,13 @@ class TeamHealthEvaluation(TeamModel):
     def timestamps_are_aware(cls, value: datetime) -> datetime:
         return require_aware(value)
 
+    @field_validator("evidence_references")
+    @classmethod
+    def evidence_references_are_unique(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(value) != len(set(value)):
+            raise ValueError("team-health evidence references must be unique")
+        return value
+
     @model_validator(mode="after")
     def interval_and_dimensions_are_complete(self) -> TeamHealthEvaluation:
         if self.interval_ended_at < self.interval_started_at:
@@ -325,6 +347,13 @@ class TeamHealthEvaluationRequest(TeamModel):
     @classmethod
     def timestamps_are_aware(cls, value: datetime) -> datetime:
         return require_aware(value)
+
+    @field_validator("evidence_references")
+    @classmethod
+    def evidence_references_are_unique(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(value) != len(set(value)):
+            raise ValueError("team-health request evidence references must be unique")
+        return value
 
     @model_validator(mode="after")
     def interval_is_ordered(self) -> TeamHealthEvaluationRequest:
@@ -490,7 +519,7 @@ class MissionCollaborationExecution(TeamModel):
     kind: CollaborationExecutionKind
     participant_ids: tuple[str, ...] = Field(min_length=2)
     task_ids: tuple[str, ...] = Field(min_length=1)
-    causal_reference: str = Field(pattern=r"^(command|event):[0-9a-f-]{36}$")
+    causal_reference: str = Field(pattern=r"^command:[0-9a-f-]{36}$")
     evidence_references: tuple[str, ...] = Field(min_length=1)
     occurred_at: datetime = Field(default_factory=utc_now)
 
@@ -506,9 +535,11 @@ class MissionCollaborationExecution(TeamModel):
         try:
             parsed = UUID(raw_id)
         except ValueError as exc:
-            raise ValueError("collaboration execution causation must contain a UUID") from exc
+            raise ValueError(
+                "collaboration execution command causation must contain a UUID"
+            ) from exc
         if str(parsed) != raw_id:
-            raise ValueError("collaboration execution causation UUID must be canonical")
+            raise ValueError("collaboration execution command UUID must be canonical")
         return value
 
     @model_validator(mode="after")
@@ -624,6 +655,33 @@ class TeamEffectivenessValidator:
 
 class TeamSignalDetector:
     """Derive cheap, attributable coordination signals without model inference."""
+
+    @staticmethod
+    def attributable_interval(
+        signals: tuple[TeamSignal, ...],
+        *,
+        interval_started_at: datetime,
+        interval_ended_at: datetime,
+        base_evidence_references: tuple[str, ...],
+        max_evidence_references: int,
+    ) -> tuple[tuple[TeamSignal, ...], tuple[str, ...]]:
+        if len(base_evidence_references) > max_evidence_references:
+            raise ValueError("base team-health evidence exceeds its configured bound")
+        attributable: list[TeamSignal] = []
+        references = list(base_evidence_references)
+        known = set(references)
+        for signal in signals:
+            if not interval_started_at <= signal.observed_at <= interval_ended_at:
+                continue
+            additional = tuple(
+                reference for reference in signal.evidence_references if reference not in known
+            )
+            if len(references) + len(additional) > max_evidence_references:
+                continue
+            attributable.append(signal)
+            references.extend(additional)
+            known.update(additional)
+        return tuple(attributable), tuple(references)
 
     @classmethod
     def detect(
@@ -947,17 +1005,18 @@ class TeamSignalDetector:
                 )
             )
 
+        coordination_events = tuple(
+            item
+            for item in ordered
+            if item.event_type
+            in {
+                "conversation.message_posted",
+                "mission.collaboration_interaction_recorded",
+                "mission.handoff_recorded",
+            }
+        )
         resource_events: dict[TeamSignalKind, tuple[EventEnvelope, ...]] = {
-            "coordination_cost": tuple(
-                item
-                for item in ordered
-                if item.event_type
-                in {
-                    "conversation.message_posted",
-                    "mission.collaboration_interaction_recorded",
-                    "mission.handoff_recorded",
-                }
-            ),
+            "coordination_cost": cls._distinct_coordination_events(coordination_events),
             "model_cost": tuple(
                 item for item in ordered if item.event_type == "crewai.model_invoked"
             ),
@@ -985,6 +1044,28 @@ class TeamSignalDetector:
                 )
             )
         return tuple(signals)
+
+    @staticmethod
+    def _distinct_coordination_events(
+        events: tuple[EventEnvelope, ...],
+    ) -> tuple[EventEnvelope, ...]:
+        identity_fields = {
+            "conversation.message_posted": "message_id",
+            "mission.collaboration_interaction_recorded": "interaction_id",
+            "mission.handoff_recorded": "handoff_id",
+        }
+        distinct: dict[tuple[str, str], EventEnvelope] = {}
+        for event in events:
+            field = identity_fields[event.event_type]
+            projected_identity = event.payload.get(field)
+            action_identity = (
+                str(projected_identity) if projected_identity is not None else event.entity_id
+            )
+            key = (event.event_type, action_identity)
+            current = distinct.get(key)
+            if current is None or (current.command_id is None and event.command_id is not None):
+                distinct[key] = event
+        return tuple(sorted(distinct.values(), key=lambda item: item.cursor))
 
     @classmethod
     def _event_signal(

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
-from typing import cast
 from uuid import NAMESPACE_URL, uuid5
 
 from mishkan.application import ApplicationCommand, CommandResult
@@ -16,13 +16,13 @@ from mishkan.missions.models import MissionRunBinding
 from mishkan.missions.repository import SQLiteMissionRepository
 from mishkan.missions.team_effectiveness import (
     MissionCollaborationPlan,
-    TeamHealthEvaluation,
     TeamHealthEvaluationRequest,
 )
 from mishkan.missions.team_repository import SQLiteTeamEffectivenessRepository
 from mishkan.persistence.application import SQLiteApplicationRepository
 
 CommandExecutor = Callable[[ApplicationCommand, str], Awaitable[CommandResult]]
+logger = logging.getLogger(__name__)
 
 
 class TeamHealthCadenceDriver:
@@ -43,6 +43,8 @@ class TeamHealthCadenceDriver:
         self._execute = execute_command
         self._task: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
+        self._last_failure: dict[str, str] | None = None
+        self._last_success_at: datetime | None = None
 
     def start(self) -> None:
         if self._task is None or self._task.done():
@@ -76,7 +78,11 @@ class TeamHealthCadenceDriver:
                     expected_revision=0,
                     payload={"request": request.model_dump(mode="json")},
                 )
-                await self._execute(command, request.evaluator_identity)
+                result = await self._execute(command, request.evaluator_identity)
+                if result.status.value == "refused":
+                    code = result.error.code if result.error is not None else "unknown"
+                    raise RuntimeError(f"team-health cadence command was durably refused: {code}")
+            self._last_success_at = now or utc_now()
 
     async def _loop(self) -> None:
         poll_seconds = max(1.0, min(30.0, self._config.evaluation_cadence_seconds / 10))
@@ -85,19 +91,30 @@ class TeamHealthCadenceDriver:
                 await self.tick()
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
                 # A failed independent evaluator must not stop task execution or the daemon.
-                pass
+                self._last_failure = {
+                    "error_type": type(exc).__name__,
+                    "failed_at": utc_now().isoformat(),
+                }
+                logger.exception("team-health cadence tick failed")
             await asyncio.sleep(poll_seconds)
 
+    def status(self) -> dict[str, object]:
+        return {
+            "running": self._task is not None and not self._task.done(),
+            "last_success_at": (
+                self._last_success_at.isoformat() if self._last_success_at is not None else None
+            ),
+            "last_failure": dict(self._last_failure) if self._last_failure is not None else None,
+        }
+
     def _due_requests(self, now: datetime) -> tuple[TeamHealthEvaluationRequest, ...]:
-        projection = self._teams.snapshot(limit=self._config.max_history_candidates)
-        raw_plans = cast(list[object], projection["collaboration_plans"])
-        plans = tuple(MissionCollaborationPlan.model_validate(item) for item in raw_plans)
-        raw_health = cast(list[object], projection["latest_health"])
+        plans = self._active_plans()
         latest_health = {
-            item.mission_id: item
-            for item in (TeamHealthEvaluation.model_validate(candidate) for candidate in raw_health)
+            plan.mission_id: records[0]
+            for plan in plans
+            if (records := self._teams.health(str(plan.mission_id), limit=1))
         }
         requests: list[TeamHealthEvaluationRequest] = []
         for plan in plans:
@@ -148,6 +165,17 @@ class TeamHealthCadenceDriver:
                 )
             )
         return tuple(requests)
+
+    def _active_plans(self) -> tuple[MissionCollaborationPlan, ...]:
+        page_size = self._config.max_history_candidates
+        offset = 0
+        plans: list[MissionCollaborationPlan] = []
+        while True:
+            page = self._teams.active_collaboration_plans(offset=offset, limit=page_size)
+            plans.extend(page)
+            if len(page) < page_size:
+                return tuple(plans)
+            offset += len(page)
 
     def _mission_events(
         self, plan: MissionCollaborationPlan, *, after_cursor: int

@@ -26,6 +26,7 @@ from mishkan.domain.time import require_aware, utc_now
 from mishkan.missions import (
     AdaptationKind,
     CollaborationEdge,
+    CollaborationReason,
     CollaborationResponsibility,
     CrewAssignmentKind,
     CrewSelectionEvidence,
@@ -86,7 +87,7 @@ class CrewAICollaborationProposal(GovernanceOutput):
 
     production_shape: ProductionShape
     production_owner_ids: tuple[str, ...] = Field(min_length=1)
-    collaboration_reasons: tuple[str, ...] = ()
+    collaboration_reasons: tuple[CollaborationReason, ...] = ()
     alternatives: tuple[str, ...] = Field(min_length=1)
     interactions: tuple[CollaborationEdge, ...] = ()
 
@@ -106,6 +107,13 @@ class CrewAICollaborationProposal(GovernanceOutput):
             self.collaboration_reasons
         ):
             raise ValueError("multi-agent collaboration requires an explicit reason")
+        if self.production_shape is ProductionShape.SINGLE_OWNER and self.collaboration_reasons:
+            raise ValueError("single-owner proposal cannot claim a multi-agent reason")
+        if (
+            self.production_shape is ProductionShape.MULTI_PRODUCER
+            and CollaborationReason.PARALLELIZABLE_WORK not in self.collaboration_reasons
+        ):
+            raise ValueError("multi-producer proposal requires parallelizable work")
         return self
 
 
@@ -838,9 +846,7 @@ class CrewAIMissionGovernanceRunner:
             )
         evidence_kinds = {
             identity_id: {
-                item.evidence_kind
-                for item in evidence
-                if item.subject_identity_id == identity_id
+                item.evidence_kind for item in evidence if item.subject_identity_id == identity_id
             }
             for identity_id in subjects
         }

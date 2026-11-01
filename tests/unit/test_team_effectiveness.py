@@ -36,6 +36,7 @@ from mishkan.missions import (
     CollaborationHistoryCitation,
     CollaborationHistorySelector,
     CollaborationInteraction,
+    CollaborationReason,
     CollaborationResponsibility,
     CrewAdaptationDecision,
     CrewAssignmentKind,
@@ -233,7 +234,7 @@ def _plan(
         production_shape=shape,
         production_owner_ids=("Backend_Service_Engineer",),
         collaboration_reasons=(
-            ("Independent evaluation and reporting authorities are required",)
+            (CollaborationReason.REQUIRED_ASSURANCE,)
             if shape is not ProductionShape.SINGLE_OWNER
             else ()
         ),
@@ -480,9 +481,7 @@ def test_composition_fixtures_make_multi_agent_value_and_cost_explicit(tmp_path:
             **base,
             "plan_id": new_id(),
             "production_shape": ProductionShape.CONSULTATIVE,
-            "collaboration_reasons": (
-                "Distinct SDK expertise reduces compatibility risk without adding another owner",
-            ),
+            "collaboration_reasons": (CollaborationReason.DISTINCT_EXPERTISE,),
             "responsibilities": (*single_owner.responsibilities, specialist),
             "interactions": (
                 *single_owner.interactions,
@@ -509,8 +508,8 @@ def test_composition_fixtures_make_multi_agent_value_and_cost_explicit(tmp_path:
                 "Integration_SDK_Engineer",
             ),
             "collaboration_reasons": (
-                "Independent backend and SDK work is parallelizable",
-                "Distinct ownership covers both required product surfaces",
+                CollaborationReason.PARALLELIZABLE_WORK,
+                CollaborationReason.DISTINCT_EXPERTISE,
             ),
             "interactions": (
                 *consultative.interactions,
@@ -913,7 +912,7 @@ def test_event_signals_derive_flow_rejection_and_rework_without_model_inference(
     )
 
 
-def test_event_signals_cover_risk_and_coordination_model_tool_costs(tmp_path: Path) -> None:
+def test_event_signals_cover_risk_and_deduplicate_coordination_costs(tmp_path: Path) -> None:
     _, _, mission, brief, crew = _mission_context(tmp_path)
     plan = _plan(mission, brief, crew)
     observed_at = utc_now()
@@ -932,14 +931,46 @@ def test_event_signals_cover_risk_and_coordination_model_tool_costs(tmp_path: Pa
             payload=payload,
         )
 
+    message_id = str(new_id())
+    interaction_id = str(new_id())
     events = (
         event(1, "mission.risk_observed", {"risk_reference": "risk:unreviewed"}),
         event(2, "mission.risk_observed", {"risk_reference": "risk:accepted"}),
         event(3, "mission.risk_acknowledged", {"risk_reference": "risk:accepted"}),
-        event(4, "conversation.message_posted", {}),
-        event(5, "mission.collaboration_interaction_recorded", {}),
-        event(6, "crewai.model_invoked", {}),
-        event(7, "tool.call_completed", {}),
+        event(4, "conversation.message_posted", {"message_id": message_id}),
+        EventEnvelope(
+            event_id=new_id(),
+            cursor=5,
+            event_type="conversation.message_posted",
+            source="mishkand",
+            entity_type="conversation_message",
+            entity_id=message_id,
+            task_id="task-1",
+            occurred_at=observed_at,
+            command_id=new_id(),
+            sensitivity="internal",
+            payload={"command_type": "conversation.message.post"},
+        ),
+        event(
+            6,
+            "mission.collaboration_interaction_recorded",
+            {"interaction_id": interaction_id},
+        ),
+        EventEnvelope(
+            event_id=new_id(),
+            cursor=7,
+            event_type="mission.collaboration_interaction_recorded",
+            source="mishkand",
+            entity_type="mission_interaction",
+            entity_id=interaction_id,
+            task_id="task-1",
+            occurred_at=observed_at,
+            command_id=new_id(),
+            sensitivity="internal",
+            payload={"command_type": "mission.interaction.record"},
+        ),
+        event(8, "crewai.model_invoked", {}),
+        event(9, "tool.call_completed", {}),
     )
 
     signals = TeamSignalDetector.detect_events(
@@ -970,12 +1001,21 @@ def test_event_signals_cover_risk_and_coordination_model_tool_costs(tmp_path: Pa
 @pytest.mark.anyio
 async def test_public_cadence_dispatches_health_evaluation_outside_task_completion(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database, missions, mission, brief, crew = _mission_context(tmp_path)
     teams = SQLiteTeamEffectivenessRepository(database)
     plan = _plan(mission, brief, crew)
     teams.record_collaboration_plan(plan)
     observed: list[ApplicationCommand] = []
+    observed_plan_pages: list[tuple[int, int]] = []
+    original_active_plans = teams.active_collaboration_plans
+
+    def active_plans(*, offset: int = 0, limit: int = 100) -> tuple[MissionCollaborationPlan, ...]:
+        observed_plan_pages.append((offset, limit))
+        return original_active_plans(offset=offset, limit=limit)
+
+    monkeypatch.setattr(teams, "active_collaboration_plans", active_plans)
 
     async def execute(command: ApplicationCommand, principal: str) -> CommandResult:
         assert principal == "Product_Functional_Evaluator"
@@ -995,7 +1035,7 @@ async def test_public_cadence_dispatches_health_evaluation_outside_task_completi
             evidence_max_events=100,
             evidence_max_artifacts=100,
             history_freshness_days=30,
-            max_history_candidates=10,
+            max_history_candidates=1,
             signal_thresholds={
                 "blocked_time_seconds": 60,
                 "queue_time_seconds": 60,
@@ -1017,6 +1057,7 @@ async def test_public_cadence_dispatches_health_evaluation_outside_task_completi
     await driver.tick(now=plan.created_at + timedelta(seconds=61))
 
     assert len(observed) == 1
+    assert observed_plan_pages == [(0, 1), (1, 1)]
     assert observed[0].command_type == "mission.health.evaluate"
     request = observed[0].payload["request"]
     assert request["mission_id"] == str(mission.mission_id)
@@ -1243,6 +1284,75 @@ def test_repository_persists_immutable_lineage_signals_and_handoffs(tmp_path: Pa
     assert "mission.collaboration_interaction_recorded" in event_types
 
 
+def test_health_contracts_reject_duplicate_evidence_references(
+    tmp_path: Path,
+) -> None:
+    _, _, mission, brief, crew = _mission_context(tmp_path)
+    plan = _plan(mission, brief, crew)
+    evaluation = _evaluation(plan)
+
+    with pytest.raises(ValidationError, match="evidence references must be unique"):
+        TeamHealthEvaluation.model_validate(
+            {
+                **evaluation.model_dump(mode="python"),
+                "evidence_references": (
+                    evaluation.evidence_references[0],
+                    evaluation.evidence_references[0],
+                ),
+            }
+        )
+
+
+def test_health_signal_selection_preserves_exact_interval_evidence(tmp_path: Path) -> None:
+    _, _, mission, brief, crew = _mission_context(tmp_path)
+    plan = _plan(mission, brief, crew)
+    now = utc_now()
+    historical = TeamSignal(
+        mission_id=mission.mission_id,
+        collaboration_plan_version=plan.version,
+        kind="rework",
+        task_ids=("implement-recovery",),
+        value=1,
+        unit="attempt",
+        evidence_references=("event:historical",),
+        observed_at=now - timedelta(days=1),
+    )
+    current = historical.model_copy(
+        update={
+            "signal_id": new_id(),
+            "evidence_references": ("event:current",),
+            "observed_at": now,
+        }
+    )
+
+    selected, evidence = TeamSignalDetector.attributable_interval(
+        (historical, current),
+        interval_started_at=now - timedelta(minutes=1),
+        interval_ended_at=now + timedelta(minutes=1),
+        base_evidence_references=("event:request",),
+        max_evidence_references=2,
+    )
+
+    assert selected == (current,)
+    assert evidence == ("event:request", "event:current")
+
+
+def test_collaboration_execution_rejects_event_causation(tmp_path: Path) -> None:
+    _, _, mission, brief, crew = _mission_context(tmp_path)
+    plan = _plan(mission, brief, crew)
+
+    with pytest.raises(ValidationError, match="causal_reference"):
+        MissionCollaborationExecution(
+            mission_id=mission.mission_id,
+            collaboration_plan_version=plan.version,
+            kind=CollaborationExecutionKind.CONSULT,
+            participant_ids=("Backend_Service_Engineer", "Product_Functional_Evaluator"),
+            task_ids=("implement-recovery",),
+            causal_reference=f"event:{new_id()}",
+            evidence_references=("artifact:consultation-evidence",),
+        )
+
+
 def test_material_adaptation_requires_an_accepted_executive_decision(tmp_path: Path) -> None:
     database, missions, mission, brief, crew = _mission_context(tmp_path)
     repository = SQLiteTeamEffectivenessRepository(database)
@@ -1333,6 +1443,33 @@ def test_retrospective_author_must_be_independent_reporting_or_audit(
     with pytest.raises(MishkanError) as conflict:
         repository.record_retrospective(record)
     assert conflict.value.envelope.code is ErrorCode.ROLE_CONFLICT
+
+
+def test_retrospective_trigger_must_match_durable_mission_state(tmp_path: Path) -> None:
+    database, _, mission, brief, crew = _mission_context(tmp_path)
+    repository = SQLiteTeamEffectivenessRepository(database)
+    plan = _plan(mission, brief, crew)
+    repository.record_collaboration_plan(plan)
+    record = MissionRetrospective(
+        mission_id=mission.mission_id,
+        collaboration_plan_version=plan.version,
+        trigger="mission_closure",
+        expected_outcomes=(brief.desired_outcome,),
+        observed_outcomes=("The mission is not durably closed",),
+        successful_patterns=(),
+        failed_patterns=(),
+        contradictions=(),
+        rework=(),
+        coordination_costs=(),
+        proposals=(),
+        non_promoted_findings=("No finding was promoted",),
+        evidence_references=("artifact:retrospective-evidence",),
+        authored_by="Technical_Change_Reporter",
+    )
+
+    with pytest.raises(MishkanError) as invalid:
+        repository.record_retrospective(record)
+    assert invalid.value.envelope.code is ErrorCode.DECISION_VALIDATION
 
 
 def test_health_cursor_and_record_identity_are_monotone(tmp_path: Path) -> None:

@@ -1853,6 +1853,11 @@ class ApplicationCommandAuthority:
                         ErrorCode.DECISION_VALIDATION,
                         "collaboration interaction causation differs from its command",
                     )
+                if normalized.actor_id not in mission_interaction.participant_ids:
+                    raise MishkanError(
+                        ErrorCode.AUTHORITY_NOT_GRANTED,
+                        "collaboration interaction actor must be an asserted participant",
+                    )
                 external_resources = (
                     f"mission:{mission_interaction.mission_id}",
                     *(f"identity:{item}" for item in mission_interaction.participant_ids),

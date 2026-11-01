@@ -162,6 +162,7 @@ from mishkan.mcp import (
 from mishkan.mcp.sdk import McpStdioCommandBuilder
 from mishkan.missions import (
     CollaborationExecutionKind,
+    CollaborationHistorySelector,
     MissionBrief,
     MissionCollaborationExecution,
     MissionCollaborationPlan,
@@ -2074,6 +2075,8 @@ def create_app(
             team_effectiveness_repository.snapshot,
             limit=daemon.event_page_limit,
         )
+        if team_health_cadence is not None:
+            team_effectiveness["cadence"] = team_health_cadence.status()
         projections["team_effectiveness"] = team_effectiveness
         return current.model_copy(update={"projections": projections})
 
@@ -3421,18 +3424,45 @@ def _dispatch(
         collaboration_plan = authorized.mission_collaboration
         if collaboration_plan is None:
             raise MishkanError(ErrorCode.OUTPUT_CONTRACT, "authorized collaboration plan is absent")
+        if team_effectiveness_config is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "team-effectiveness configuration is unavailable",
+            )
+        if (
+            len(collaboration_plan.history_citations)
+            > team_effectiveness_config.max_history_candidates
+        ):
+            raise MishkanError(
+                ErrorCode.OUTPUT_CONTRACT,
+                "collaboration plan exceeds the public history-candidate bound",
+            )
+        history = CollaborationHistorySelector.select(
+            collaboration_plan.history_citations,
+            freshness_days=team_effectiveness_config.history_freshness_days,
+            now=collaboration_plan.created_at,
+        )
+        if history.ignored:
+            raise MishkanError(
+                ErrorCode.DECISION_VALIDATION,
+                "accepted collaboration plan cites stale, conflicting, or different history",
+                details={"ignored_mission_ids": [str(item.mission_id) for item in history.ignored]},
+            )
         recorded_plan = team_effectiveness_repository.record_collaboration_plan(collaboration_plan)
         return "mission.collaboration_plan_recorded", recorded_plan.model_dump(mode="json")
     if command.command_type == "mission.health.record":
         team_health = authorized.team_health_evaluation
         if team_health is None:
             raise MishkanError(ErrorCode.OUTPUT_CONTRACT, "authorized team evaluation is absent")
+        _require_observed_health_cursor(repository, team_health.evidence_cursor)
         recorded_health = team_effectiveness_repository.record_health(team_health)
         collaboration_plan = team_effectiveness_repository.collaboration_plan(
             str(team_health.mission_id), team_health.collaboration_plan_version
         )
         task_ids = tuple(
-            item.task_id for item in mission_repository.assignments(str(team_health.mission_id))
+            dict.fromkeys(
+                item.task_id for item in mission_repository.assignments(str(team_health.mission_id))
+            )
         )
         if task_ids:
             _record_collaboration_execution(
@@ -3464,6 +3494,7 @@ def _dispatch(
                 ErrorCode.OUTPUT_CONTRACT,
                 "team-health request exceeds the configured evidence-reference bound",
             )
+        _require_observed_health_cursor(repository, health_request.evidence_cursor)
         health_plan = team_effectiveness_repository.collaboration_plan(
             str(health_request.mission_id), health_request.collaboration_plan_version
         )
@@ -3561,14 +3592,21 @@ def _dispatch(
             str(health_request.mission_id),
             limit=team_effectiveness_config.evidence_max_events,
         )
+        attributable_signals, attributable_references = TeamSignalDetector.attributable_interval(
+            signals,
+            interval_started_at=health_request.interval_started_at,
+            interval_ended_at=health_request.interval_ended_at,
+            base_evidence_references=health_request.evidence_references,
+            max_evidence_references=team_effectiveness_config.evidence_max_artifacts,
+        )
         health_evaluation = team_health_evaluator.evaluate(
             health_plan,
-            signals,
+            attributable_signals,
             evaluator_identity=health_request.evaluator_identity,
             interval_started_at=health_request.interval_started_at,
             interval_ended_at=health_request.interval_ended_at,
             evidence_cursor=health_request.evidence_cursor,
-            evidence_references=health_request.evidence_references,
+            evidence_references=attributable_references,
         )
         recorded_health = team_effectiveness_repository.record_health(health_evaluation)
         task_ids = tuple(dict.fromkeys(item.task_id for item in assignments))
@@ -3591,29 +3629,19 @@ def _dispatch(
         adaptation = authorized.crew_adaptation
         if adaptation is None:
             raise MishkanError(ErrorCode.OUTPUT_CONTRACT, "authorized crew adaptation is absent")
+        if team_effectiveness_config is None:
+            raise MishkanError(
+                ErrorCode.REQUIRED_DEPENDENCY,
+                "team-effectiveness configuration is unavailable",
+            )
+        if adaptation.disposition.value == "bounded" and not {
+            item.value for item in adaptation.adaptation_kinds
+        }.issubset(set(team_effectiveness_config.automatic_adaptations)):
+            raise MishkanError(
+                ErrorCode.AUTHORITY_NOT_GRANTED,
+                "bounded adaptation is outside the public automatic-adaptation ceiling",
+            )
         recorded_adaptation = team_effectiveness_repository.record_adaptation(adaptation)
-        adaptation_plan = team_effectiveness_repository.collaboration_plan(
-            str(adaptation.mission_id), adaptation.before_plan_version
-        )
-        affected_owners = tuple(
-            dict.fromkeys(
-                item.accountable_owner
-                for item in mission_repository.assignments(str(adaptation.mission_id))
-                if item.task_id in adaptation.affected_task_ids
-            )
-        )
-        participants = tuple(dict.fromkeys((adaptation.decided_by, *affected_owners)))
-        if len(participants) >= 2:
-            _record_collaboration_execution(
-                team_effectiveness_repository,
-                command,
-                mission_id=adaptation.mission_id,
-                plan=adaptation_plan,
-                kind=CollaborationExecutionKind.ADAPT,
-                participant_ids=participants,
-                task_ids=adaptation.affected_task_ids,
-                evidence_references=adaptation.evidence_references,
-            )
         return "mission.crew_adaptation_recorded", recorded_adaptation.model_dump(mode="json")
     if command.command_type == "mission.retrospective.record":
         retrospective = authorized.mission_retrospective
@@ -3655,6 +3683,7 @@ def _dispatch(
                 ErrorCode.OUTPUT_CONTRACT,
                 "authorized collaboration interaction is absent",
             )
+        _require_collaboration_evidence(repository, artifacts, interaction.evidence_references)
         recorded_interaction = team_effectiveness_repository.record_interaction(interaction)
         return (
             "mission.collaboration_interaction_recorded",
@@ -4451,6 +4480,61 @@ def _record_collaboration_execution(
             evidence_references=evidence_references,
         )
     )
+
+
+def _require_observed_health_cursor(
+    repository: SQLiteApplicationRepository,
+    cursor: int,
+) -> None:
+    if cursor == 0:
+        return
+    if not repository.event_cursor_exists(cursor):
+        raise MishkanError(
+            ErrorCode.DECISION_VALIDATION,
+            "team-health evidence cursor does not identify a retained application event",
+            details={"evidence_cursor": cursor},
+        )
+
+
+def _require_collaboration_evidence(
+    repository: SQLiteApplicationRepository,
+    artifacts: DurableArtifactService,
+    references: tuple[str, ...],
+) -> None:
+    for reference in references:
+        prefix, separator, raw_identity = reference.partition(":")
+        if not separator or prefix not in {"artifact", "event"}:
+            raise MishkanError(
+                ErrorCode.DECISION_VALIDATION,
+                "collaboration evidence must reference a durable Artifact or event",
+                details={"reference": reference},
+            )
+        try:
+            identity = UUID(raw_identity)
+        except ValueError as exc:
+            raise MishkanError(
+                ErrorCode.DECISION_VALIDATION,
+                "collaboration evidence identity is invalid",
+                details={"reference": reference},
+            ) from exc
+        if prefix == "event":
+            observed = repository.event_exists(identity)
+        else:
+            try:
+                artifacts.manifest(reference)
+            except MishkanError as exc:
+                raise MishkanError(
+                    ErrorCode.DECISION_VALIDATION,
+                    "collaboration evidence Artifact does not exist",
+                    details={"reference": reference},
+                ) from exc
+            observed = True
+        if not observed:
+            raise MishkanError(
+                ErrorCode.DECISION_VALIDATION,
+                "collaboration evidence event does not exist",
+                details={"reference": reference},
+            )
 
 
 def _session_credential_references(request: ExecutionRequest) -> tuple[CredentialReference, ...]:
