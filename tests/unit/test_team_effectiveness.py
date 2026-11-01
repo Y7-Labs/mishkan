@@ -528,6 +528,38 @@ def test_composition_fixtures_make_multi_agent_value_and_cost_explicit(tmp_path:
         }
     )
 
+    outcome_coverage = {
+        single_owner.plan_id: frozenset({"api"}),
+        consultative.plan_id: frozenset({"api", "sdk"}),
+        multi_producer.plan_id: frozenset({"api", "sdk"}),
+    }
+    assurance_coverage = {
+        single_owner.plan_id: frozenset({"functional"}),
+        consultative.plan_id: frozenset({"functional", "compatibility"}),
+        multi_producer.plan_id: frozenset({"functional", "compatibility"}),
+    }
+    observed_parallelism = {
+        single_owner.plan_id: 1,
+        consultative.plan_id: 1,
+        multi_producer.plan_id: 2,
+    }
+
+    def smallest_sufficient(
+        plans: tuple[MissionCollaborationPlan, ...],
+        *,
+        required_outcomes: frozenset[str],
+        required_assurance: frozenset[str],
+        parallel_workstreams: int,
+    ) -> MissionCollaborationPlan:
+        eligible = tuple(
+            plan
+            for plan in plans
+            if required_outcomes.issubset(outcome_coverage[plan.plan_id])
+            and required_assurance.issubset(assurance_coverage[plan.plan_id])
+            and observed_parallelism[plan.plan_id] >= parallel_workstreams
+        )
+        return min(eligible, key=lambda plan: plan.communication_budget.value)
+
     assert single_owner.production_owner_ids == ("Backend_Service_Engineer",)
     assert consultative.production_owner_ids == single_owner.production_owner_ids
     assert any(
@@ -536,6 +568,25 @@ def test_composition_fixtures_make_multi_agent_value_and_cost_explicit(tmp_path:
     assert len(multi_producer.production_owner_ids) == 2
     assert multi_producer.collaboration_reasons
     assert multi_producer.communication_budget.value > single_owner.communication_budget.value
+    variants = (single_owner, consultative, multi_producer)
+    assert (
+        smallest_sufficient(
+            variants,
+            required_outcomes=frozenset({"api"}),
+            required_assurance=frozenset({"functional"}),
+            parallel_workstreams=1,
+        )
+        == single_owner
+    )
+    assert (
+        smallest_sufficient(
+            variants,
+            required_outcomes=frozenset({"api", "sdk"}),
+            required_assurance=frozenset({"functional", "compatibility"}),
+            parallel_workstreams=2,
+        )
+        == multi_producer
+    )
 
 
 def test_health_is_multidimensional_independent_and_never_a_composite_score(

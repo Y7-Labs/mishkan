@@ -14,7 +14,9 @@ from mishkan.crewai.mission_environment import (
 from mishkan.crewai.mission_governance import (
     CrewAICollaborationProposal,
     CrewAIMissionGovernanceRunner,
+    CTOApprovedAssignment,
     CTOMissionReview,
+    MissionGovernanceEvidence,
     MissionGovernanceResult,
     PMMissionProposal,
 )
@@ -23,8 +25,6 @@ from mishkan.missions import (
     CollaborationEdge,
     CollaborationInteraction,
     CrewAssignmentKind,
-    CrewSelectionEvidence,
-    MissionCrewMember,
     MissionEnvironmentAlternative,
     MissionEnvironmentContextRequest,
     MissionEnvironmentIntent,
@@ -202,27 +202,17 @@ _SCENARIOS = (
 )
 
 
-def _selection(identity_id: str, scenario: _Scenario) -> CrewSelectionEvidence:
-    return CrewSelectionEvidence(
-        project_references=tuple(f"scope:{item}" for item in scenario.scope),
-        competence_references=(f"profile:{identity_id}:{scenario.scenario_id}",),
-        availability_references=(f"availability:{identity_id}:fixture",),
-        conflict_assessment="No production, evaluation, reporting, or ownership conflict",
-        risk_coverage=(f"risk:{scenario.scenario_id}",),
-        independence_references=(f"independence:{identity_id}",),
-    )
-
-
-def _member(
+def _approval(
     identity_id: str,
     kind: CrewAssignmentKind,
     scenario: _Scenario,
-) -> MissionCrewMember:
-    return MissionCrewMember(
+) -> CTOApprovedAssignment:
+    return CTOApprovedAssignment(
         identity_id=identity_id,
         assignment_kind=kind,
         responsibility=f"Own {kind.value} for {scenario.scenario_id}",
-        selection_evidence=_selection(identity_id, scenario),
+        conflict_assessment="No production, evaluation, reporting, or ownership conflict",
+        risk_coverage=(f"risk:{scenario.scenario_id}",),
     )
 
 
@@ -297,33 +287,44 @@ def _governance(
         evidence_references=(f"fixture:{scenario.scenario_id}:technical",),
         coverage=("technical", "platform", "security", "quality", "operability"),
         mission_lead_id=scenario.producer,
-        approved_members=(
-            _member(scenario.producer, CrewAssignmentKind.PRODUCTION, scenario),
-            _member(scenario.evaluator, CrewAssignmentKind.EVALUATION, scenario),
-            _member(scenario.reporter, CrewAssignmentKind.REPORTING, scenario),
+        approved_assignments=(
+            _approval(scenario.producer, CrewAssignmentKind.PRODUCTION, scenario),
+            _approval(scenario.evaluator, CrewAssignmentKind.EVALUATION, scenario),
+            _approval(scenario.reporter, CrewAssignmentKind.REPORTING, scenario),
         ),
         unresolved_findings=(),
         approved_collaboration=collaboration,
     )
-    selection_references = tuple(
-        reference
-        for member in cto.approved_members
-        for reference in (
-            *member.selection_evidence.project_references,
-            *member.selection_evidence.competence_references,
-            *member.selection_evidence.availability_references,
-            *member.selection_evidence.independence_references,
-        )
-    )
+    evidence = [
+        MissionGovernanceEvidence(
+            reference=f"fixture:{scenario.scenario_id}:product",
+            summary=f"Accepted product evidence for {scenario.scenario_id}",
+            evidence_kind="product",
+        ),
+        MissionGovernanceEvidence(
+            reference=f"fixture:{scenario.scenario_id}:technical",
+            summary=f"Accepted technical evidence for {scenario.scenario_id}",
+            evidence_kind="technical",
+        ),
+    ]
+    for identity_id in (scenario.producer, scenario.evaluator, scenario.reporter):
+        for evidence_kind in ("project", "competence", "availability", "independence"):
+            evidence.append(
+                MissionGovernanceEvidence(
+                    reference=(f"fixture:{scenario.scenario_id}:{identity_id}:{evidence_kind}"),
+                    summary=(
+                        f"Accepted {evidence_kind} evidence for {identity_id} in "
+                        f"{scenario.scenario_id}"
+                    ),
+                    evidence_kind=evidence_kind,
+                    subject_identity_id=identity_id,
+                )
+            )
     return mission, runner.compile(
         mission,
         pm,
         cto,
-        evidence_references=(
-            f"fixture:{scenario.scenario_id}:product",
-            f"fixture:{scenario.scenario_id}:technical",
-            *selection_references,
-        ),
+        evidence=tuple(evidence),
     )
 
 

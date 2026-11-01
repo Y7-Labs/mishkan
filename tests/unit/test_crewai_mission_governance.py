@@ -12,6 +12,7 @@ from mishkan.conversations import EscalationOption
 from mishkan.crewai.mission_governance import (
     CrewAICollaborationProposal,
     CrewAIMissionGovernanceRunner,
+    CTOApprovedAssignment,
     CTOMissionReview,
     MissionGovernanceEvidence,
     MissionGovernanceRequest,
@@ -23,8 +24,6 @@ from mishkan.missions import (
     CollaborationEdge,
     CollaborationInteraction,
     CrewAssignmentKind,
-    CrewSelectionEvidence,
-    MissionCrewMember,
     MissionEnvironmentIntent,
     MissionOrigin,
     MissionOriginKind,
@@ -100,19 +99,13 @@ def _pm() -> PMMissionProposal:
     )
 
 
-def _member(identity_id: str, kind: CrewAssignmentKind) -> MissionCrewMember:
-    return MissionCrewMember(
+def _approval(identity_id: str, kind: CrewAssignmentKind) -> CTOApprovedAssignment:
+    return CTOApprovedAssignment(
         identity_id=identity_id,
         assignment_kind=kind,
         responsibility=f"Perform attributable {kind.value} work",
-        selection_evidence=CrewSelectionEvidence(
-            project_references=("repository:api",),
-            competence_references=(f"profile:{identity_id}:competence",),
-            availability_references=(f"profile:{identity_id}:availability",),
-            conflict_assessment="No production, evaluation, or reporting conflict",
-            risk_coverage=("account recovery",),
-            independence_references=(f"profile:{identity_id}:independence",),
-        ),
+        conflict_assessment="No production, evaluation, or reporting conflict",
+        risk_coverage=("account recovery",),
     )
 
 
@@ -125,11 +118,15 @@ def _cto(
         rationale="Technical, security, quality, and reporting coverage is explicit",
         evidence_references=("evidence:technical-review",),
         coverage=("technical", "platform", "security", "quality", "operability"),
-        mission_lead_id="Backend_Service_Engineer",
-        approved_members=(
-            _member("Backend_Service_Engineer", CrewAssignmentKind.PRODUCTION),
-            _member("Product_Functional_Evaluator", CrewAssignmentKind.EVALUATION),
-            _member("Technical_Change_Reporter", CrewAssignmentKind.REPORTING),
+        mission_lead_id=None if rejected else "Backend_Service_Engineer",
+        approved_assignments=(
+            ()
+            if rejected
+            else (
+                _approval("Backend_Service_Engineer", CrewAssignmentKind.PRODUCTION),
+                _approval("Product_Functional_Evaluator", CrewAssignmentKind.EVALUATION),
+                _approval("Technical_Change_Reporter", CrewAssignmentKind.REPORTING),
+            )
         ),
         unresolved_findings=() if not rejected else ("risk unresolved",),
         disputed_scope=() if not rejected else ("task:security-design",),
@@ -158,21 +155,38 @@ def _cto(
     )
 
 
-def _governance_evidence_references() -> tuple[str, ...]:
-    return (
-        "evidence:product-analysis",
-        "evidence:technical-review",
-        *tuple(
-            reference
-            for member in _cto().approved_members
-            for reference in (
-                *member.selection_evidence.project_references,
-                *member.selection_evidence.competence_references,
-                *member.selection_evidence.availability_references,
-                *member.selection_evidence.independence_references,
-            )
+def _governance_evidence() -> tuple[MissionGovernanceEvidence, ...]:
+    records = [
+        MissionGovernanceEvidence(
+            reference="evidence:product-analysis",
+            summary="Accepted product analysis",
+            evidence_kind="product",
         ),
-    )
+        MissionGovernanceEvidence(
+            reference="evidence:technical-review",
+            summary="Accepted technical review",
+            evidence_kind="technical",
+        ),
+    ]
+    for identity_id in (
+        "Backend_Service_Engineer",
+        "Product_Functional_Evaluator",
+        "Technical_Change_Reporter",
+    ):
+        for kind in ("project", "competence", "availability", "independence"):
+            records.append(
+                MissionGovernanceEvidence(
+                    reference=f"profile:{identity_id}:{kind}",
+                    summary=f"Accepted {kind} evidence for {identity_id}",
+                    evidence_kind=kind,
+                    subject_identity_id=identity_id,
+                )
+            )
+    return tuple(records)
+
+
+def _governance_evidence_references() -> tuple[str, ...]:
+    return tuple(item.reference for item in _governance_evidence())
 
 
 def test_pm_cto_outputs_compile_to_confirmed_brief_and_contextual_crew(tmp_path: Path) -> None:
@@ -181,7 +195,7 @@ def test_pm_cto_outputs_compile_to_confirmed_brief_and_contextual_crew(tmp_path:
         _mission(),
         _pm(),
         _cto(),
-        evidence_references=_governance_evidence_references(),
+        evidence=_governance_evidence(),
     )
 
     assert result.brief.pm_confirmation is not None
@@ -233,13 +247,7 @@ def test_proposal_runs_bounded_pm_then_cto_crewai_work(
 
     result = runner.propose(
         _mission(),
-        tuple(
-            MissionGovernanceEvidence(
-                reference=reference,
-                summary=f"Attributable mission evidence for {reference}",
-            )
-            for reference in _governance_evidence_references()
-        ),
+        tuple(_governance_evidence()),
     )
 
     assert result.disposition == "agreed"
@@ -248,6 +256,63 @@ def test_proposal_runs_bounded_pm_then_cto_crewai_work(
     assert calls[1][1] == runner._config.crewai.mission_cto_model_route
     assert calls[0][2] is PMMissionProposal
     assert calls[1][2] is CTOMissionReview
+
+
+def test_attributed_candidate_evidence_bounds_the_crewai_roster(tmp_path: Path) -> None:
+    runner = CrewAIMissionGovernanceRunner(_config(tmp_path))
+    evidence = tuple(
+        item
+        for item in _governance_evidence()
+        if item.subject_identity_id
+        in {"Backend_Service_Engineer", "Product_Functional_Evaluator"}
+    )
+
+    projection = runner._roster_projection(evidence)
+
+    assert '"identity_id": "Backend_Service_Engineer"' in projection
+    assert '"identity_id": "Product_Functional_Evaluator"' in projection
+    assert '"identity_id": "PM"' in projection
+    assert '"identity_id": "CTO"' in projection
+    assert '"identity_id": "Mobile_Application_Engineer"' not in projection
+
+
+def test_candidate_projection_requires_all_deterministic_eligibility_evidence(
+    tmp_path: Path,
+) -> None:
+    runner = CrewAIMissionGovernanceRunner(_config(tmp_path))
+
+    with pytest.raises(MishkanError, match="eligibility evidence") as error:
+        runner._roster_projection(
+            (
+                MissionGovernanceEvidence(
+                    reference="profile:Backend_Service_Engineer:competence",
+                    summary="Accepted backend competence evidence",
+                    evidence_kind="competence",
+                    subject_identity_id="Backend_Service_Engineer",
+                ),
+            )
+        )
+
+    assert error.value.envelope.details == {
+        "incomplete": {
+            "Backend_Service_Engineer": ["availability", "independence", "project"]
+        }
+    }
+
+
+def test_unknown_attributed_candidate_is_rejected_before_model_work(tmp_path: Path) -> None:
+    runner = CrewAIMissionGovernanceRunner(_config(tmp_path))
+
+    with pytest.raises(MishkanError, match="unknown candidate identity"):
+        runner._roster_projection(
+            (
+                MissionGovernanceEvidence(
+                    reference="profile:Imaginary_Engineer:competence",
+                    summary="Untrusted candidate assertion",
+                    subject_identity_id="Imaginary_Engineer",
+                ),
+            )
+        )
 
 
 def test_selected_optional_template_guidance_reaches_both_crewai_tasks(
@@ -291,10 +356,7 @@ def test_selected_optional_template_guidance_reaches_both_crewai_tasks(
 
     runner.propose(
         mission,
-        tuple(
-            MissionGovernanceEvidence(reference=item, summary=f"Evidence for {item}")
-            for item in _governance_evidence_references()
-        ),
+        tuple(_governance_evidence()),
     )
 
     assert len(prompts) == 2
@@ -312,7 +374,7 @@ def test_cto_rejection_compiles_to_actionable_disagreement_without_a_crew(
         _mission(),
         _pm(),
         _cto("rejected"),
-        evidence_references=_governance_evidence_references(),
+        evidence=_governance_evidence(),
     )
 
     assert result.disposition == "disagreement"
@@ -342,7 +404,7 @@ def test_governance_disagreement_cannot_claim_blocked_work_as_independent(
             _mission(),
             _pm(),
             contradictory,
-            evidence_references=_governance_evidence_references(),
+            evidence=_governance_evidence(),
         )
 
 
@@ -350,9 +412,9 @@ def test_cto_cannot_silently_replace_the_pm_confirmed_composition(tmp_path: Path
     runner = CrewAIMissionGovernanceRunner(_config(tmp_path))
     changed = _cto().model_copy(
         update={
-            "approved_members": (
-                _member("Backend_Service_Engineer", CrewAssignmentKind.PRODUCTION),
-                _member("Software_Technical_Evaluator", CrewAssignmentKind.EVALUATION),
+            "approved_assignments": (
+                _approval("Backend_Service_Engineer", CrewAssignmentKind.PRODUCTION),
+                _approval("Software_Technical_Evaluator", CrewAssignmentKind.EVALUATION),
             )
         }
     )
@@ -362,9 +424,24 @@ def test_cto_cannot_silently_replace_the_pm_confirmed_composition(tmp_path: Path
             _mission(),
             _pm(),
             changed,
-            evidence_references=_governance_evidence_references(),
+            evidence=_governance_evidence(),
         )
     assert error.value.envelope.code is ErrorCode.MISSION
+
+
+def test_cto_cannot_select_a_non_eligible_mission_lead(tmp_path: Path) -> None:
+    runner = CrewAIMissionGovernanceRunner(_config(tmp_path))
+    changed = _cto().model_copy(update={"mission_lead_id": "Product_Functional_Evaluator"})
+
+    with pytest.raises(MishkanError, match="lead-eligible") as error:
+        runner.compile(
+            _mission(),
+            _pm(),
+            changed,
+            evidence=_governance_evidence(),
+        )
+
+    assert error.value.envelope.code is ErrorCode.ROLE_CONFLICT
 
 
 def test_governance_rejects_evidence_references_absent_from_the_input(tmp_path: Path) -> None:
@@ -375,10 +452,10 @@ def test_governance_rejects_evidence_references_absent_from_the_input(tmp_path: 
             _mission(),
             _pm(),
             _cto(),
-            evidence_references=tuple(
-                reference
-                for reference in _governance_evidence_references()
-                if reference != "evidence:technical-review"
+            evidence=tuple(
+                item
+                for item in _governance_evidence()
+                if item.reference != "evidence:technical-review"
             ),
         )
 
@@ -386,29 +463,29 @@ def test_governance_rejects_evidence_references_absent_from_the_input(tmp_path: 
     assert error.value.envelope.details == {"references": ["evidence:technical-review"]}
 
 
-def test_governance_rejects_unattributed_crew_selection_evidence(tmp_path: Path) -> None:
+def test_governance_rejects_missing_deterministic_crew_selection_evidence(tmp_path: Path) -> None:
     runner = CrewAIMissionGovernanceRunner(_config(tmp_path))
-    cto = _cto()
-    first = cto.approved_members[0]
-    invented = first.model_copy(
-        update={
-            "selection_evidence": first.selection_evidence.model_copy(
-                update={"availability_references": ("availability:invented",)}
-            )
-        }
-    )
-    changed = cto.model_copy(update={"approved_members": (invented, *cto.approved_members[1:])})
 
     with pytest.raises(MishkanError) as error:
         runner.compile(
             _mission(),
             _pm(),
-            changed,
-            evidence_references=_governance_evidence_references(),
+            _cto(),
+            evidence=tuple(
+                item
+                for item in _governance_evidence()
+                if not (
+                    item.subject_identity_id == "Backend_Service_Engineer"
+                    and item.evidence_kind == "availability"
+                )
+            ),
         )
 
     assert error.value.envelope.code is ErrorCode.PLAN
-    assert error.value.envelope.details == {"references": ["availability:invented"]}
+    assert error.value.envelope.details == {
+        "identity_id": "Backend_Service_Engineer",
+        "missing": ("availability",),
+    }
 
 
 def test_confirmed_cto_review_requires_complete_i06_coverage() -> None:

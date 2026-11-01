@@ -2147,6 +2147,11 @@ class ApplicationCommandAuthority:
                 external_resources = (
                     f"mission:{mission_governance_request.mission_id}",
                     *(f"evidence:{item.reference}" for item in mission_governance_request.evidence),
+                    *(
+                        f"identity:{item.subject_identity_id}"
+                        for item in mission_governance_request.evidence
+                        if item.subject_identity_id is not None
+                    ),
                 )
             elif normalized.command_type == "mission.environment.propose":
                 mission_environment_planning_request = (

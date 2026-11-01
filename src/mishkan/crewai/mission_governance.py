@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterator
 from datetime import datetime
 from typing import Literal, Protocol, TypeVar, cast
 from uuid import UUID
 
-from crewai import LLM, Agent, Crew, Process, Task
+from crewai import Agent, BaseLLM, Crew, Process, Task
 from crewai.crews.crew_output import CrewOutput
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from mishkan.config.models import MishkanConfig
 from mishkan.conversations import (
@@ -27,6 +28,7 @@ from mishkan.missions import (
     CollaborationEdge,
     CollaborationResponsibility,
     CrewAssignmentKind,
+    CrewSelectionEvidence,
     ExecutiveConfirmation,
     MissionBrief,
     MissionBriefStatus,
@@ -40,7 +42,7 @@ from mishkan.missions import (
     ProductionShape,
 )
 from mishkan.organization import OrganizationRosterDefinition, load_canonical_organization
-from mishkan.organization.models import RoleDefinition
+from mishkan.organization.models import ProfessionalIdentityDefinition, RoleDefinition
 
 OutputT = TypeVar("OutputT", bound=BaseModel)
 
@@ -52,6 +54,31 @@ class GovernanceOutput(BaseModel):
 class MissionGovernanceEvidence(GovernanceOutput):
     reference: str = Field(min_length=1, max_length=2_048)
     summary: str = Field(min_length=1, max_length=8_192)
+    evidence_kind: Literal[
+        "product",
+        "technical",
+        "project",
+        "competence",
+        "availability",
+        "independence",
+        "other",
+    ] = "other"
+    subject_identity_id: str | None = Field(default=None, min_length=2, max_length=128)
+
+    @model_validator(mode="after")
+    def selection_evidence_has_a_subject(self) -> MissionGovernanceEvidence:
+        if (
+            self.evidence_kind
+            in {
+                "project",
+                "competence",
+                "availability",
+                "independence",
+            }
+            and self.subject_identity_id is None
+        ):
+            raise ValueError("identity selection evidence requires an explicit subject")
+        return self
 
 
 class CrewAICollaborationProposal(GovernanceOutput):
@@ -124,13 +151,21 @@ class PMMissionProposal(GovernanceOutput):
     collaboration: CrewAICollaborationProposal
 
 
+class CTOApprovedAssignment(GovernanceOutput):
+    identity_id: str = Field(min_length=2, max_length=128)
+    assignment_kind: CrewAssignmentKind
+    responsibility: str = Field(min_length=3, max_length=4_096)
+    conflict_assessment: str = Field(min_length=3, max_length=4_096)
+    risk_coverage: tuple[str, ...] = Field(min_length=1)
+
+
 class CTOMissionReview(GovernanceOutput):
     disposition: Literal["confirmed", "rejected"]
     rationale: str = Field(min_length=3, max_length=4_096)
     evidence_references: tuple[str, ...] = Field(min_length=1)
-    coverage: tuple[str, ...] = Field(min_length=1)
-    mission_lead_id: str = Field(min_length=2, max_length=128)
-    approved_members: tuple[MissionCrewMember, ...] = Field(min_length=2)
+    coverage: tuple[str, ...] = ()
+    mission_lead_id: str | None = Field(default=None, min_length=2, max_length=128)
+    approved_assignments: tuple[CTOApprovedAssignment, ...] = ()
     unresolved_findings: tuple[str, ...]
     disputed_scope: tuple[str, ...] = ()
     alternatives: tuple[EscalationOption, ...] = ()
@@ -142,6 +177,10 @@ class CTOMissionReview(GovernanceOutput):
     @model_validator(mode="after")
     def rejection_is_actionable(self) -> CTOMissionReview:
         if self.disposition == "confirmed":
+            if self.mission_lead_id is None:
+                raise ValueError("confirmed CTO review requires a mission lead")
+            if len(self.approved_assignments) < 2:
+                raise ValueError("confirmed CTO review requires at least two approved assignments")
             if self.approved_collaboration is None:
                 raise ValueError("confirmed CTO review requires an approved collaboration proposal")
             normalized = " ".join(self.coverage).lower()
@@ -164,6 +203,10 @@ class CTOMissionReview(GovernanceOutput):
             return self
         if self.approved_collaboration is not None:
             raise ValueError("rejected CTO review cannot approve a collaboration proposal")
+        if self.approved_assignments:
+            raise ValueError("rejected CTO review cannot approve Mission Crew assignments")
+        if self.mission_lead_id is not None:
+            raise ValueError("rejected CTO review cannot approve a mission lead")
         option_ids = {item.option_id for item in self.alternatives}
         if (
             not self.unresolved_findings
@@ -322,6 +365,17 @@ class MissionGovernanceRunner(Protocol):
     ) -> MissionGovernanceResult: ...
 
 
+class MissionGovernanceModelRouter(Protocol):
+    """Supply CrewAI-compatible models without bypassing CrewAI execution."""
+
+    def candidates_for(
+        self,
+        route_name: str,
+        *,
+        timeout_seconds: int | None = None,
+    ) -> Iterator[BaseLLM]: ...
+
+
 class CrewAIMissionGovernanceRunner:
     """Run attributable PM then CTO work through CrewAI's production runtime."""
 
@@ -330,9 +384,10 @@ class CrewAIMissionGovernanceRunner:
         config: MishkanConfig,
         organization: OrganizationRosterDefinition | None = None,
         mission_templates: MissionTemplateService | None = None,
+        model_router: MissionGovernanceModelRouter | None = None,
     ) -> None:
         self._config = config
-        self._models = CrewAIModelRouter(config)
+        self._models = model_router or CrewAIModelRouter(config)
         self._organization = organization or load_canonical_organization()
         self._mission_templates = mission_templates
 
@@ -357,7 +412,7 @@ class CrewAIMissionGovernanceRunner:
             mission,
             pm,
             cto,
-            evidence_references=tuple(item.reference for item in evidence),
+            evidence=evidence,
         )
 
     def compile(
@@ -366,10 +421,11 @@ class CrewAIMissionGovernanceRunner:
         pm: PMMissionProposal,
         cto: CTOMissionReview,
         *,
-        evidence_references: tuple[str, ...],
+        evidence: tuple[MissionGovernanceEvidence, ...],
     ) -> MissionGovernanceResult:
+        evidence_references = tuple(item.reference for item in evidence)
         proposed = tuple(pm.proposed_identity_ids)
-        approved = tuple(member.identity_id for member in cto.approved_members)
+        approved = tuple(item.identity_id for item in cto.approved_assignments)
         if len(proposed) != len(set(proposed)):
             raise MishkanError(ErrorCode.MISSION, "PM proposed duplicate Mission Crew identities")
         if cto.disposition == "confirmed" and set(proposed) != set(approved):
@@ -382,6 +438,11 @@ class CrewAIMissionGovernanceRunner:
                 ErrorCode.MISSION,
                 "PM and CTO did not confirm the same collaboration proposal",
             )
+        approved_members = (
+            self._approved_members(cto.approved_assignments, evidence)
+            if cto.disposition == "confirmed"
+            else ()
+        )
         collaboration_identities = {
             *pm.collaboration.production_owner_ids,
             *(edge.source_identity for edge in pm.collaboration.interactions),
@@ -394,9 +455,9 @@ class CrewAIMissionGovernanceRunner:
                 details={"unknown": sorted(unknown_collaborators)},
             )
         approved_producers = {
-            member.identity_id
-            for member in cto.approved_members
-            if member.assignment_kind
+            assignment.identity_id
+            for assignment in cto.approved_assignments
+            if assignment.assignment_kind
             in {CrewAssignmentKind.PRODUCTION, CrewAssignmentKind.CONTRIBUTOR}
         }
         if cto.disposition == "confirmed" and not set(
@@ -413,10 +474,23 @@ class CrewAIMissionGovernanceRunner:
                 "mission proposal references unknown professional identities",
                 details={"unknown": sorted(unknown)},
             )
+        if cto.disposition == "confirmed":
+            assert cto.mission_lead_id is not None
+            lead = next(
+                item
+                for item in self._organization.identities
+                if item.identity_id == cto.mission_lead_id
+            )
+            if cto.mission_lead_id not in approved or not lead.mission_lead_eligible:
+                raise MishkanError(
+                    ErrorCode.ROLE_CONFLICT,
+                    "CTO mission lead is not an approved lead-eligible crew member",
+                    details={"identity_id": cto.mission_lead_id},
+                )
         allowed_evidence = set(evidence_references)
         crew_selection_references = {
             reference
-            for member in cto.approved_members
+            for member in approved_members
             for reference in (
                 *member.selection_evidence.project_references,
                 *member.selection_evidence.competence_references,
@@ -521,8 +595,8 @@ class CrewAIMissionGovernanceRunner:
             organization_id=mission.organization_id,
             organization_version=mission.organization_version,
             brief_version=brief.version,
-            mission_lead_id=cto.mission_lead_id,
-            members=cto.approved_members,
+            mission_lead_id=cast(str, cto.mission_lead_id),
+            members=approved_members,
             pm_composition_confirmation_id=pm_confirmation.confirmation_id,
             cto_coverage_confirmation_id=cto_confirmation.confirmation_id,
             revision_reason="PM/CTO CrewAI proposal compiled from attributable evidence",
@@ -537,6 +611,50 @@ class CrewAIMissionGovernanceRunner:
             lineage=lineage,
         )
 
+    @staticmethod
+    def _approved_members(
+        assignments: tuple[CTOApprovedAssignment, ...],
+        evidence: tuple[MissionGovernanceEvidence, ...],
+    ) -> tuple[MissionCrewMember, ...]:
+        if len({item.identity_id for item in assignments}) != len(assignments):
+            raise MishkanError(ErrorCode.MISSION, "CTO approved duplicate Mission Crew identities")
+        by_subject: dict[str, dict[str, list[str]]] = {}
+        for item in evidence:
+            if item.subject_identity_id is None:
+                continue
+            by_kind = by_subject.setdefault(item.subject_identity_id, {})
+            by_kind.setdefault(item.evidence_kind, []).append(item.reference)
+        members = []
+        for assignment in assignments:
+            by_kind = by_subject.get(assignment.identity_id, {})
+            missing = tuple(
+                kind
+                for kind in ("project", "competence", "availability", "independence")
+                if not by_kind.get(kind)
+            )
+            if missing:
+                raise MishkanError(
+                    ErrorCode.PLAN,
+                    "CTO assignment lacks deterministic identity-selection evidence",
+                    details={"identity_id": assignment.identity_id, "missing": missing},
+                )
+            members.append(
+                MissionCrewMember(
+                    identity_id=assignment.identity_id,
+                    assignment_kind=assignment.assignment_kind,
+                    responsibility=assignment.responsibility,
+                    selection_evidence=CrewSelectionEvidence(
+                        project_references=tuple(by_kind["project"]),
+                        competence_references=tuple(by_kind["competence"]),
+                        availability_references=tuple(by_kind["availability"]),
+                        conflict_assessment=assignment.conflict_assessment,
+                        risk_coverage=assignment.risk_coverage,
+                        independence_references=tuple(by_kind["independence"]),
+                    ),
+                )
+            )
+        return tuple(members)
+
     def _kickoff_structured(
         self,
         *,
@@ -547,29 +665,64 @@ class CrewAIMissionGovernanceRunner:
         output_model: type[OutputT],
     ) -> OutputT:
         failures: list[str] = []
+        validation_failures: list[str] = []
         role = self._role(identity_id, route_name)
         for llm in self._models.candidates_for(route_name):
-            prompt = description
+            schema = json.dumps(output_model.model_json_schema(), sort_keys=True)
+            prompt = (
+                f"{description}\nReturn one complete JSON object and no commentary. "
+                f"The object must satisfy this JSON Schema: {schema}"
+            )
             for _attempt in range(self._config.crewai.structured_output_retries + 1):
                 try:
                     output = self._crew(role, llm, prompt, expected_output, output_model)
                     if isinstance(output.pydantic, output_model):
                         return output.pydantic
-                    return output_model.model_validate_json(output.raw)
+                    return self._parse_raw_output(output.raw, output_model)
                 except Exception as exc:
                     failures.append(type(exc).__name__)
-                    prompt = description + "\nReturn one complete value matching the JSON Schema."
+                    validation_failures.append(self._validation_feedback(exc))
+                    prompt = (
+                        f"{description}\nReturn one complete JSON object and no commentary. "
+                        f"The object must satisfy this JSON Schema: {schema}\n"
+                        "The previous output was invalid at exactly these contract locations: "
+                        f"{self._validation_feedback(exc)}. Correct those locations."
+                    )
         raise MishkanError(
             ErrorCode.REQUIRED_DEPENDENCY,
             "all configured CrewAI mission-governance candidates failed",
-            details={"identity_id": identity_id, "failure_types": failures},
+            details={
+                "identity_id": identity_id,
+                "failure_types": failures,
+                "validation_failures": validation_failures,
+            },
             retryable=True,
         )
+
+    @staticmethod
+    def _parse_raw_output(raw: str, output_model: type[OutputT]) -> OutputT:
+        candidate = raw.strip()
+        if candidate.startswith("```"):
+            first_break = candidate.find("\n")
+            if first_break < 0 or not candidate.endswith("```"):
+                raise ValueError("fenced mission-governance output is incomplete")
+            candidate = candidate[first_break + 1 : -3].strip()
+        return output_model.model_validate_json(candidate)
+
+    @staticmethod
+    def _validation_feedback(exc: Exception) -> str:
+        if not isinstance(exc, ValidationError):
+            return f"<root> [{type(exc).__name__}]"
+        locations = []
+        for error in exc.errors(include_input=False, include_context=False):
+            path = ".".join(str(item) for item in error["loc"]) or "<root>"
+            locations.append(f"{path} [{error['type']}: {error['msg']}]")
+        return ", ".join(locations)
 
     def _crew(
         self,
         role: RoleDefinition,
-        llm: LLM,
+        llm: BaseLLM,
         description: str,
         expected_output: str,
         output_model: type[OutputT],
@@ -591,7 +744,6 @@ class CrewAIMissionGovernanceRunner:
             expected_output=expected_output,
             agent=agent,
             tools=[],
-            output_pydantic=output_model,
         )
         return cast(
             CrewOutput,
@@ -626,11 +778,12 @@ class CrewAIMissionGovernanceRunner:
     ) -> str:
         return (
             "Produce the product Mission Brief proposal for this mission. Do not invent evidence, "
-            "authority, tools, or a fixed workflow. Select identities only from the supplied "
-            "roster.\n"
+            "authority, tools, or a fixed workflow. Select Mission Crew members only from "
+            "eligible_mission_candidates; governance_identities govern the proposal and are not "
+            "crew candidates unless also explicitly eligible.\n"
             f"Mission: {mission.model_dump_json()}\n"
             f"Optional template guidance: {self._template_projection(mission)}\n"
-            f"Roster: {self._roster_projection()}\n"
+            f"Roster: {self._roster_projection(evidence)}\n"
             f"Evidence: {self._evidence_projection(evidence)}"
         )
 
@@ -643,12 +796,16 @@ class CrewAIMissionGovernanceRunner:
         return (
             "Independently confirm or reject technical, security, quality, operability, and "
             "independence coverage. Keep exactly the PM-proposed identities when confirming; "
+            "a confirmation must name technical, platform, security, quality, and operability "
+            "coverage. Reject only when supplied evidence contains an explicit unresolved "
+            "finding; general model uncertainty is not evidence of a finding. "
             "otherwise reject with findings, disputed scope, at least two real options with "
             "consequences and risks, both PM and CTO recommendations, and the independent work "
-            "that can continue. Do not grant tools or authority.\n"
+            "that can continue, with no approved lead, assignments, or collaboration. Do not "
+            "grant tools or authority. Confirm members only from eligible_mission_candidates.\n"
             f"Mission: {mission.model_dump_json()}\nPM proposal: {pm.model_dump_json()}\n"
             f"Optional template guidance: {self._template_projection(mission)}\n"
-            f"Roster: {self._roster_projection()}\n"
+            f"Roster: {self._roster_projection(evidence)}\n"
             f"Evidence: {self._evidence_projection(evidence)}"
         )
 
@@ -659,19 +816,67 @@ class CrewAIMissionGovernanceRunner:
             sort_keys=True,
         )
 
-    def _roster_projection(self) -> str:
+    def _roster_projection(self, evidence: tuple[MissionGovernanceEvidence, ...]) -> str:
+        known = {item.identity_id: item for item in self._organization.identities}
+        subjects = tuple(
+            dict.fromkeys(
+                item.subject_identity_id
+                for item in evidence
+                if item.subject_identity_id is not None
+            )
+        )
+        if not subjects:
+            raise MishkanError(
+                ErrorCode.PLAN,
+                "mission governance requires explicit attributed candidate evidence",
+            )
+        if unknown := set(subjects) - set(known):
+            raise MishkanError(
+                ErrorCode.ROLE_CONFLICT,
+                "mission governance evidence names an unknown candidate identity",
+                details={"unknown": sorted(unknown)},
+            )
+        evidence_kinds = {
+            identity_id: {
+                item.evidence_kind
+                for item in evidence
+                if item.subject_identity_id == identity_id
+            }
+            for identity_id in subjects
+        }
+        required = {"project", "competence", "availability", "independence"}
+        incomplete = {
+            identity_id: sorted(required - evidence_kinds[identity_id])
+            for identity_id in subjects
+            if not required.issubset(evidence_kinds[identity_id])
+        }
+        if incomplete:
+            raise MishkanError(
+                ErrorCode.PLAN,
+                "mission candidate lacks deterministic eligibility evidence",
+                details={"incomplete": incomplete},
+            )
+        candidates = tuple(known[identity_id] for identity_id in subjects)
         return json.dumps(
-            [
-                {
-                    "identity_id": item.identity_id,
-                    "responsibility": item.responsibility,
-                    "independence_class": item.independence_class.value,
-                    "mission_lead_eligible": item.mission_lead_eligible,
-                }
-                for item in self._organization.identities
-            ],
+            {
+                "governance_identities": [
+                    self._identity_projection(known[item]) for item in ("PM", "CTO")
+                ],
+                "eligible_mission_candidates": [
+                    self._identity_projection(item) for item in candidates
+                ],
+            },
             sort_keys=True,
         )
+
+    @staticmethod
+    def _identity_projection(item: ProfessionalIdentityDefinition) -> dict[str, object]:
+        return {
+            "identity_id": item.identity_id,
+            "responsibility": item.responsibility,
+            "independence_class": item.independence_class.value,
+            "mission_lead_eligible": item.mission_lead_eligible,
+        }
 
     def _template_projection(self, mission: MissionRecord) -> str:
         reference = mission.origin.template_reference
